@@ -1121,41 +1121,121 @@ async function handleApi(req, res, url) {
 
   // ============================================================================
   // /api/export — 一键导出观测数据（含每 Agent 每 Session 的全部详细日志）
+  // GET  /api/export?agents=...&since=...&until=...  → 按 Agent/时间批量导出
+  // POST /api/export  body: { sessions: [{agent, session_id}, ...] } → 选择性导出
   // ============================================================================
   if (p === "/api/export") {
-    const agentFilter = url.searchParams.get("agents");
-    const agentNames = agentFilter
-      ? agentFilter.split(",").filter((n) => adapters[n])
-      : Object.keys(adapters);
-    const timeFilter = parseTimeFilter(url);
-    const since = timeFilter.since || 0;
-    const until = timeFilter.until || Date.now();
-
     const now = Date.now();
     const stamp = beijingIso().replace(/[-:T]/g, "").slice(0, 15);
     const filename = `observatory-export-${stamp}.json`;
-
     const exportData = { export_metadata: {}, summary: {}, agents: {} };
-
-    // --- export_metadata ---
     const sessionsByAgent = {};
     let totalSessions = 0;
     let availableAgents = 0;
-
-    // --- summary: reuse aggregateForCompare logic ---
     const compareData = {};
-
-    // --- per-agent session detail ---
     const useDB = getDBStats().session_count > 0;
 
-    for (const name of agentNames) {
-      const adapter = adapters[name];
+    // Helper: build full detail for one session
+    async function buildSessionDetail(adapter, name, sid) {
+      // metrics
+      let metrics = [];
+      try {
+        if (useDB) {
+          const fromDB = getDBSessionMetrics(name, sid);
+          if (fromDB && fromDB.length > 0) metrics = fromDB;
+        }
+        if (metrics.length === 0) metrics = await adapter.extractMetrics(sid);
+      } catch {}
 
-      // agent_info via discover()
-      let agentInfo;
+      // events
+      let events = [];
+      try {
+        if (useDB) {
+          const fromDB = getDBEvents(name, sid);
+          if (fromDB && fromDB.length > 0) events = fromDB;
+        }
+        if (events.length === 0) events = (await adapter.extractEvents?.(sid)) || [];
+      } catch {}
+
+      // usage
+      let usage = [];
+      try {
+        if (useDB) {
+          const fromDB = getDBUsage(name, sid);
+          if (fromDB && fromDB.length > 0) usage = fromDB;
+        }
+        if (usage.length === 0) usage = (await adapter.extractUsage?.(sid)) || [];
+      } catch {}
+
+      // calls (always live, no DB cache)
+      let calls = { llm_calls: [], tool_calls: [], trace_duration_ms: null };
+      try {
+        if (adapter.extractCalls) calls = await adapter.extractCalls(sid);
+      } catch {}
+
+      // failures (always live, no DB cache)
+      let failures = {
+        diagnostics: [],
+        summary: { gateway: 0, tool: 0, model: 0, dependency: 0, agent: 0 },
+        source_available: true,
+      };
+      try {
+        if (adapter.extractFailures) {
+          const f = await adapter.extractFailures(sid);
+          const fsum = f.summary || {};
+          const failuresNc = f.source_available === false;
+          failures = {
+            diagnostics: f.diagnostics || [],
+            summary: {
+              gateway: failuresNc ? null : (fsum.gateway || 0),
+              tool: failuresNc ? null : (fsum.tool || 0),
+              model: failuresNc ? null : (fsum.model || 0),
+              dependency: failuresNc ? null : (fsum.dependency || 0),
+              agent: failuresNc ? null : (fsum.agent || 0),
+            },
+            source_available: f.source_available !== false,
+          };
+        }
+      } catch {}
+
+      // timeline
+      let timeline = [];
+      try {
+        if (useDB) {
+          const fromDB = getDBTimeline(name, sid);
+          if (fromDB && fromDB.length > 0) timeline = fromDB;
+        }
+        if (timeline.length === 0) timeline = (await adapter.extractTimeline?.(sid)) || [];
+      } catch {}
+
+      // build metricMap for compare summary
+      const metricMap = {};
+      for (const m of metrics) {
+        if (!metricMap[m.metric] || m.state === "captured") {
+          metricMap[m.metric] = { value: m.value, state: m.state, unit: m.unit };
+        }
+      }
+      const fsum = failures.summary;
+      const failuresNc = !failures.source_available;
+      for (const cat of ["gateway", "tool", "model", "dependency", "agent"]) {
+        metricMap["failures_" + cat] = failuresNc
+          ? { value: null, state: "not-captured", missing_reason: "source_unavailable" }
+          : { value: fsum[cat] || 0, state: "captured" };
+      }
+
+      return {
+        detail: { session: null, metrics, events, usage, calls, failures, timeline },
+        metricMap,
+      };
+    }
+
+    // Helper: get agent_info via discover
+    async function getAgentInfo(name) {
+      const adapter = adapters[name];
+      if (!adapter) return { available: false, adapter_version: null, error: "unknown_agent" };
       try {
         const d = await adapter.discover();
-        agentInfo = {
+        return {
           available: d.available,
           adapter_version: d.adapter_version,
           agent_version: d.agent_version,
@@ -1164,9 +1244,105 @@ async function handleApi(req, res, url) {
           modes: d.modes || [],
         };
       } catch (e) {
-        agentInfo = { available: false, adapter_version: null, error: e.message };
+        return { available: false, adapter_version: null, error: e.message };
       }
+    }
+
+    // Helper: finalize one agent's export block
+    function finalizeAgent(name, agentInfo, sessionDetails, sessionMetricsForCompare) {
       if (agentInfo.available) availableAgents++;
+      sessionsByAgent[name] = sessionDetails.length;
+      totalSessions += sessionDetails.length;
+      exportData.agents[name] = { agent_info: agentInfo, sessions: sessionDetails };
+      compareData[name] = aggregateForCompare(sessionMetricsForCompare);
+    }
+
+    // --- POST: selective export (specific sessions) ---
+    if (req.method === "POST") {
+      const body = await new Promise((resolve) => {
+        let data = ""; req.on("data", (c) => (data += c)); req.on("end", () => resolve(data));
+      });
+      let parsed = {};
+      try { parsed = JSON.parse(body || "{}"); } catch { return json(res, { error: "invalid_json" }, 400); }
+      const selected = parsed.sessions || [];
+      if (!Array.isArray(selected) || selected.length === 0) {
+        return json(res, { error: "no_sessions_selected" }, 400);
+      }
+
+      // group by agent
+      const byAgent = {};
+      for (const item of selected) {
+        if (!item.agent || !item.session_id || !adapters[item.agent]) continue;
+        if (!byAgent[item.agent]) byAgent[item.agent] = [];
+        byAgent[item.agent].push(item.session_id);
+      }
+
+      for (const name of Object.keys(byAgent)) {
+        const adapter = adapters[name];
+        const agentInfo = await getAgentInfo(name);
+        const sessionDetails = [];
+        const sessionMetricsForCompare = [];
+
+        for (const sid of byAgent[name]) {
+          // get session metadata
+          let sessionObj = null;
+          try {
+            if (useDB) sessionObj = getDBSessionItem(name, sid);
+            if (!sessionObj) {
+              const sessions = await adapter.extractSessions({ limit: 500 });
+              sessionObj = sessions.items.find((s) => s.session_id === sid);
+            }
+          } catch {}
+          if (!sessionObj) continue;
+
+          const { detail, metricMap } = await buildSessionDetail(adapter, name, sid);
+          detail.session = sessionObj;
+          sessionDetails.push(detail);
+          sessionMetricsForCompare.push({ session_id: sid, metrics: metricMap });
+        }
+
+        finalizeAgent(name, agentInfo, sessionDetails, sessionMetricsForCompare);
+      }
+
+      exportData.export_metadata = {
+        exported_at: beijingIso(),
+        exported_at_epoch_ms: now,
+        tool_version: config.appVersion,
+        filter: {
+          mode: "selected",
+          sessions: selected.length,
+          agents: Object.keys(byAgent),
+        },
+        statistics: {
+          total_agents: Object.keys(byAgent).length,
+          available_agents: availableAgents,
+          total_sessions: totalSessions,
+          sessions_by_agent: sessionsByAgent,
+        },
+      };
+      exportData.summary = { generated_at: beijingIso(), agents: compareData };
+
+      const bodyOut = JSON.stringify(redact(exportData), null, 2);
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      });
+      res.end(bodyOut);
+      return;
+    }
+
+    // --- GET: bulk export (by agent/time filter) ---
+    const agentFilter = url.searchParams.get("agents");
+    const agentNames = agentFilter
+      ? agentFilter.split(",").filter((n) => adapters[n])
+      : Object.keys(adapters);
+    const timeFilter = parseTimeFilter(url);
+    const since = timeFilter.since || 0;
+    const until = timeFilter.until || Date.now();
+
+    for (const name of agentNames) {
+      const adapter = adapters[name];
+      const agentInfo = await getAgentInfo(name);
 
       // get sessions
       let sessions = [];
@@ -1180,118 +1356,18 @@ async function handleApi(req, res, url) {
         }
       } catch { sessions = []; }
 
-      sessionsByAgent[name] = sessions.length;
-      totalSessions += sessions.length;
-
-      // collect sessionMetrics for compare summary
-      const sessionMetricsForCompare = [];
-
-      // build per-session detail
       const sessionDetails = [];
+      const sessionMetricsForCompare = [];
       for (const s of sessions) {
         const sid = s.session_id || s.id;
         if (!sid) continue;
-
-        // metrics
-        let metrics = [];
-        try {
-          if (useDB) {
-            const fromDB = getDBSessionMetrics(name, sid);
-            if (fromDB && fromDB.length > 0) metrics = fromDB;
-          }
-          if (metrics.length === 0) metrics = await adapter.extractMetrics(sid);
-        } catch {}
-
-        // events
-        let events = [];
-        try {
-          if (useDB) {
-            const fromDB = getDBEvents(name, sid);
-            if (fromDB && fromDB.length > 0) events = fromDB;
-          }
-          if (events.length === 0) events = (await adapter.extractEvents?.(sid)) || [];
-        } catch {}
-
-        // usage
-        let usage = [];
-        try {
-          if (useDB) {
-            const fromDB = getDBUsage(name, sid);
-            if (fromDB && fromDB.length > 0) usage = fromDB;
-          }
-          if (usage.length === 0) usage = (await adapter.extractUsage?.(sid)) || [];
-        } catch {}
-
-        // calls (always live, no DB cache)
-        let calls = { llm_calls: [], tool_calls: [], trace_duration_ms: null };
-        try {
-          if (adapter.extractCalls) calls = await adapter.extractCalls(sid);
-        } catch {}
-
-        // failures (always live, no DB cache)
-        let failures = {
-          diagnostics: [],
-          summary: { gateway: 0, tool: 0, model: 0, dependency: 0, agent: 0 },
-          source_available: true,
-        };
-        try {
-          if (adapter.extractFailures) {
-            const f = await adapter.extractFailures(sid);
-            const fsum = f.summary || {};
-            const failuresNc = f.source_available === false;
-            failures = {
-              diagnostics: f.diagnostics || [],
-              summary: {
-                gateway: failuresNc ? null : (fsum.gateway || 0),
-                tool: failuresNc ? null : (fsum.tool || 0),
-                model: failuresNc ? null : (fsum.model || 0),
-                dependency: failuresNc ? null : (fsum.dependency || 0),
-                agent: failuresNc ? null : (fsum.agent || 0),
-              },
-              source_available: f.source_available !== false,
-            };
-          }
-        } catch {}
-
-        // timeline
-        let timeline = [];
-        try {
-          if (useDB) {
-            const fromDB = getDBTimeline(name, sid);
-            if (fromDB && fromDB.length > 0) timeline = fromDB;
-          }
-          if (timeline.length === 0) timeline = (await adapter.extractTimeline?.(sid)) || [];
-        } catch {}
-
-        // merge failures into metrics for compare summary
-        const metricMap = {};
-        for (const m of metrics) {
-          if (!metricMap[m.metric] || m.state === "captured") {
-            metricMap[m.metric] = { value: m.value, state: m.state, unit: m.unit };
-          }
-        }
-        const fsum = failures.summary;
-        const failuresNc = !failures.source_available;
-        for (const cat of ["gateway", "tool", "model", "dependency", "agent"]) {
-          metricMap["failures_" + cat] = failuresNc
-            ? { value: null, state: "not-captured", missing_reason: "source_unavailable" }
-            : { value: fsum[cat] || 0, state: "captured" };
-        }
+        const { detail, metricMap } = await buildSessionDetail(adapter, name, sid);
+        detail.session = s;
+        sessionDetails.push(detail);
         sessionMetricsForCompare.push({ session_id: sid, metrics: metricMap });
-
-        sessionDetails.push({
-          session: s,
-          metrics,
-          events,
-          usage,
-          calls,
-          failures,
-          timeline,
-        });
       }
 
-      exportData.agents[name] = { agent_info: agentInfo, sessions: sessionDetails };
-      compareData[name] = aggregateForCompare(sessionMetricsForCompare);
+      finalizeAgent(name, agentInfo, sessionDetails, sessionMetricsForCompare);
     }
 
     exportData.export_metadata = {
@@ -1310,18 +1386,14 @@ async function handleApi(req, res, url) {
         sessions_by_agent: sessionsByAgent,
       },
     };
+    exportData.summary = { generated_at: beijingIso(), agents: compareData };
 
-    exportData.summary = {
-      generated_at: beijingIso(),
-      agents: compareData,
-    };
-
-    const body = JSON.stringify(redact(exportData), null, 2);
+    const bodyOut = JSON.stringify(redact(exportData), null, 2);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}"`,
     });
-    res.end(body);
+    res.end(bodyOut);
     return;
   }
 
