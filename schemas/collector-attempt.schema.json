@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-log-observatory/collector-attempt-0.1.0.schema.json",
+  "title": "Collector Attempt Record",
+  "description": "Attempt-level timing record emitted by Agent-side collectors, consumed by lib/collector-reader.mjs",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "agent_object",
+    "session_id",
+    "attempt_id",
+    "attempt_index",
+    "requested_at",
+    "first_output_source",
+    "timestamp_basis",
+    "precision_ns",
+    "status",
+    "collector",
+    "collector_version",
+    "collected_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "collector-attempt-0.1.0"
+    },
+    "agent_object": {
+      "type": "string",
+      "enum": ["workbuddy", "mobilework", "opencode", "teleagent", "doubao", "dsh", "codex"]
+    },
+    "installation_id": {
+      "type": "string",
+      "default": "default"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "turn_id": { "type": ["string", "null"] },
+    "step_id": { "type": ["string", "null"] },
+    "llm_call_id": { "type": ["string", "null"] },
+    "attempt_id": { "type": "string" },
+    "attempt_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "is_retry": { "type": "boolean", "default": false },
+    "retry_of": { "type": ["string", "null"] },
+    "requested_at": {
+      "type": "number",
+      "description": "Epoch ms when LLM request was issued"
+    },
+    "first_output_at": {
+      "type": ["number", "null"],
+      "description": "Epoch ms when first token/chunk arrived. Null = not observed."
+    },
+    "first_output_source": {
+      "type": ["string", "null"],
+      "enum": ["native", "derived", null],
+      "description": "native = real first token timestamp; derived = inferred"
+    },
+    "stream_ended_at": { "type": ["number", "null"] },
+    "timestamp_basis": {
+      "type": "string",
+      "enum": ["epoch_ms", "monotonic_ns"],
+      "description": "monotonic_ns = high precision, no collision; epoch_ms = may collide"
+    },
+    "precision_ns": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Actual clock precision in nanoseconds"
+    },
+    "provider": { "type": ["string", "null"] },
+    "requested_model": { "type": ["string", "null"] },
+    "routed_model": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "error", "timeout", "cancelled"]
+    },
+    "error_kind": { "type": ["string", "null"] },
+    "http_status": { "type": ["integer", "null"] },
+    "usage": {
+      "type": ["object", "null"],
+      "properties": {
+        "input": { "type": ["integer", "null"] },
+        "output": { "type": ["integer", "null"] },
+        "cache_read": { "type": ["integer", "null"] },
+        "cache_write": { "type": ["integer", "null"] },
+        "reasoning": { "type": ["integer", "null"] }
+      }
+    },
+    "human_confirm": {
+      "type": ["object", "null"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "decided_at": { "type": ["number", "null"] },
+        "decision": { "type": ["string", "null"], "enum": ["allow", "deny", "modified", null] }
+      }
+    },
+    "collector": { "type": "string" },
+    "collector_version": { "type": "string" },
+    "collected_at": {
+      "type": "number",
+      "description": "Epoch ms when collector wrote this record"
+    }
+  },
+  "additionalProperties": false
+}

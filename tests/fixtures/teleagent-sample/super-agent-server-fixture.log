@@ -1,0 +1,10 @@
+2026/09/28 15:39:43.385939 service.go:1207: [Info] [request_id:fix-req-001] Service Prompt start, session id:ses_fixture_ta_001
+2026/09/28 15:39:43.395154 service.go:145: [Info] [request_id:fix-req-001] resolveModel, return direct model: NewApi/chat-flash
+2026/09/28 15:39:43.293071 middleware.go:81: [Info] [request_id:fix-req-001] receive request method=POST path=/session/ses_fixture_ta_001/message 
+2026/09/28 15:39:54.792813 processor.go:1453: [Info] [request_id:fix-req-001] [perm] tool=powershell action=allow by=powershell:*
+2026/09/28 15:39:55.572706 tool_instruction_review.go:208: [Info] [request_id:fix-req-001] [tool_instruction_review] decision, toolID=powershell, result=1, action=allow, reason=no issues, approvalID=, durationMs=778
+2026/09/28 15:39:56.047138 processor.go:744: [Info] [request_id:fix-req-001] [cost] provider=NewApi tokens(in=25804 out=449 cacheRead=0) cost=$0.000000
+2026/09/28 15:40:04.660155 processor.go:744: [Info] [request_id:fix-req-001] [cost] provider=NewApi tokens(in=638 out=241 cacheRead=25600) cost=$0.000000
+2026/09/28 15:41:15.906758 compaction.go:694: [Info] [request_id:fix-req-001] [prune] total=0 pruned=0 candidates=0
+2026/09/28 15:41:50.000000 middleware.go:84: [Info] [request_id:fix-req-001] finish request method=POST path=/session/ses_fixture_ta_001/message status=200 latency=127000000ms
+2026/09/28 15:47:00.000000 engine.go:470: [Error] HERTZ: Error=write tcp 127.0.0.1:4397->127.0.0.1:61784: wsasend: connection aborted, remoteAddr=127.0.0.1:61784

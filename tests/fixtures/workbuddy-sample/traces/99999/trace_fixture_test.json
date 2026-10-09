@@ -1,0 +1,82 @@
+{
+  "trace": {
+    "traceId": "trace_fixture_test_001",
+    "name": "fixture-test-trace",
+    "workerPid": 99999,
+    "workerHostname": "test-host",
+    "startedAt": "2026-09-29T03:15:30.721Z",
+    "endedAt": "2026-09-29T03:16:30.000Z",
+    "duration": 59279,
+    "status": "ok",
+    "spanCount": 5,
+    "sessionId": "fixture-session-001",
+    "agentName": "cli",
+    "modelInfo": { "modelID": "deepseek-v4.1-flash" }
+  },
+  "spans": [
+    {
+      "traceId": "trace_fixture_test_001",
+      "spanId": "span_gen_001",
+      "parentId": "span_agent_001",
+      "name": "generation",
+      "type": "generation",
+      "startedAt": "2026-09-29T03:15:31.446Z",
+      "endedAt": "2026-09-29T03:15:34.446Z",
+      "duration": 3000,
+      "status": "ok",
+      "error": null
+    },
+    {
+      "traceId": "trace_fixture_test_001",
+      "spanId": "span_gen_002",
+      "parentId": "span_agent_001",
+      "name": "generation",
+      "type": "generation",
+      "startedAt": "2026-09-29T03:15:41.393Z",
+      "endedAt": "2026-09-29T03:15:44.893Z",
+      "duration": 3500,
+      "status": "ok",
+      "error": null
+    },
+    {
+      "traceId": "trace_fixture_test_001",
+      "spanId": "span_gen_003",
+      "parentId": "span_agent_001",
+      "name": "generation",
+      "type": "generation",
+      "startedAt": "2026-09-29T03:15:51.792Z",
+      "endedAt": "2026-09-29T03:15:54.792Z",
+      "duration": 3000,
+      "status": "ok",
+      "error": null
+    },
+    {
+      "traceId": "trace_fixture_test_001",
+      "spanId": "span_agent_001",
+      "parentId": null,
+      "name": "cli",
+      "type": "agent",
+      "startedAt": "2026-09-29T03:15:30.721Z",
+      "endedAt": "2026-09-29T03:16:30.000Z",
+      "duration": 59279,
+      "status": "ok",
+      "error": null,
+      "agentName": "cli"
+    },
+    {
+      "traceId": "trace_fixture_test_001",
+      "spanId": "span_fn_001",
+      "parentId": "span_gen_001",
+      "name": "Bash",
+      "type": "function",
+      "startedAt": "2026-09-29T03:15:35.000Z",
+      "endedAt": "2026-09-29T03:15:36.000Z",
+      "duration": 1000,
+      "status": "ok",
+      "error": null,
+      "toolName": "Bash",
+      "toolInput": "echo hello",
+      "toolOutput": "hello"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "opencode-collector-plugin",
+  "version": "0.1.0",
+  "description": "OpenCode V2 session-hook collector; source and runtime owned by Agent Log Observatory.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "plugin",
+    "observatory",
+    "ttft",
+    "collector"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

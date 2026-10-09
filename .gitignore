@@ -1,0 +1,14 @@
+# Local settings, credentials, history and generated output
+/node_modules/
+/agent-log-observatory.config.json
+/agent-log-observatory.config.jsonc
+/runtime/*
+!/runtime/sqlite3.exe
+!/runtime/README.md
+/collectors/mobilework-llm-proxy/proxy-config.json
+/releases/*
+!/releases/README.md
+/stdout.txt
+/stderr.txt
+*.bak
+*.llm-proxy-bak

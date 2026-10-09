@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MetricResult",
+  "version": "0.2.0",
+  "type": "object",
+  "required": ["metric", "definition_version", "value", "state"],
+  "properties": {
+    "metric": { "type": "string" },
+    "definition_version": { "type": "string", "const": "metrics-0.2.0" },
+    "value": { "type": ["number", "null"] },
+    "unit": { "type": ["string", "null"] },
+    "scope": { "type": ["string", "null"] },
+    "scope_id": { "type": ["string", "null"] },
+    "state": { "type": "string", "enum": ["captured", "partial", "not-captured", "not-applicable"] },
+    "evidence_grade": { "type": "string", "enum": ["direct", "derived", "estimated", "unknown"] },
+    "missing_reason": { "type": ["string", "null"] },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "eligible": { "type": "integer" },
+        "observed": { "type": "integer" },
+        "finished": { "type": "integer" },
+        "collisions": { "type": "integer" }
+      }
+    },
+    "numerator": { "type": ["number", "null"] },
+    "denominator": { "type": ["number", "null"] },
+    "comparable": { "type": "boolean" }
+  }
+}

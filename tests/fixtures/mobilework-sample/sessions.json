@@ -1,0 +1,3 @@
+[
+  {"id":"ses_fixture_mw_001","model":"{\"id\":\"shangtang/deepseek-v4-flash\",\"providerID\":\"----shangtang-deepseek-v4-flash\"}","agent":"mobilework","cost":0.0,"tokens_input":34506,"tokens_output":95,"tokens_reasoning":24,"tokens_cache_read":13952,"tokens_cache_write":0,"time_created":1790503695000,"time_updated":1790503732000,"parent_id":null,"workspace_id":"ws-test","title":"Fixture Mobilework Session"}
+]

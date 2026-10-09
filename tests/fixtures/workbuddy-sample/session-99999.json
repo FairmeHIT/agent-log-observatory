@@ -1,0 +1,16 @@
+{
+  "pid": 99999,
+  "lastHeartbeat": 1790503732000,
+  "sessionId": "fixture-session-001",
+  "cwd": "C:/test/workspace",
+  "startedAt": 1790503695000,
+  "kind": "interactive",
+  "url": "http://127.0.0.1:99999",
+  "endpoint": "http://127.0.0.1:99999",
+  "mode": "local",
+  "version": "2.147.0",
+  "os": "win32",
+  "arch": "x64",
+  "hostname": "test-host",
+  "updatedAt": 1790503732001
+}

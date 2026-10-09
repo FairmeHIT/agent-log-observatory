@@ -1,0 +1,14 @@
+{
+  "name": "doubao-cdp-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Doubao CDP-based collector: captures LLM attempt timing (TTFT/token/retry) via Chrome DevTools Protocol",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

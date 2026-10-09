@@ -1,0 +1,1713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Log Observatory</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --accent: #2563eb;
+  --accent-light: #dbeafe;
+  --success: #059669;
+  --success-bg: #d1fae5;
+  --error: #dc2626;
+  --error-bg: #fee2e2;
+  --warning: #d97706;
+  --warning-bg: #fef3c7;
+  --running: #2563eb;
+  --running-bg: #dbeafe;
+  --card-shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Inter', "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Header */
+.header {
+  background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+  color: #fff;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15);
+}
+.header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+.header .tabs { display: flex; gap: 4px; margin-left: 24px; }
+.header .tab {
+  padding: 6px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255,255,255,.75);
+  background: rgba(255,255,255,.12);
+  transition: all .15s;
+}
+.header .tab:hover { background: rgba(255,255,255,.22); color: #fff; }
+.header .tab.active { background: rgba(255,255,255,.92); color: #1e3a5f; }
+.header select {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.3);
+  background: rgba(255,255,255,.15);
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+}
+.header select option { color: #1f2d3d; }
+.header .ver { margin-left: auto; font-size: 12px; opacity: .7; }
+
+/* Layout */
+.layout { display: flex; min-height: calc(100vh - 58px); }
+
+/* Sidebar */
+.sidebar {
+  width: 280px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.sidebar .item {
+  padding: 10px 16px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  transition: background .1s;
+}
+.sidebar .item:hover { background: #f8fafc; }
+.sidebar .item.active {
+  background: var(--accent-light);
+  border-left: 3px solid var(--accent);
+  padding-left: 13px;
+}
+.sidebar .item .agent-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 6px;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.sidebar .item .agent-badge.workbuddy { background: #dbeafe; color: #1d4ed8; }
+.sidebar .item .agent-badge.mobilework { background: #dcfce7; color: #166534; }
+.sidebar .item .agent-badge.teleagent { background: #fef3c7; color: #92400e; }
+.sidebar .item .agent-badge.doubao { background: #f3e8ff; color: #6b21a8; }
+.sidebar .item .agent-badge.dsh { background: #fce7f3; color: #9f1239; }
+.sidebar .item .agent-badge.codex { background: #e0e7ff; color: #3730a3; }
+.sidebar .item .agent-badge.opencode { background: #ccfbf1; color: #115e59; }
+.sidebar .item .sid { font-size: 12px; color: var(--text); font-weight: 500; margin-top: 2px; }
+.sidebar .item .time { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+
+/* Main */
+.main {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+/* Section title */
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title .sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Cards */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
+  transition: box-shadow .15s;
+}
+.card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+.card .k {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 4px;
+}
+.card .v {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+.card .u { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.card.nc .v { color: var(--text-muted); font-size: 15px; font-weight: 500; }
+.card .v.accent { color: var(--accent); }
+.card .v.success { color: var(--success); }
+.card .v.error { color: var(--error); }
+.card .v.warning { color: var(--warning); }
+
+/* Failure section */
+.failure-section {
+  margin-bottom: 20px;
+}
+.failure-tags {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.failure-tag {
+  padding: 3px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.failure-tag.gateway { background: var(--error-bg); color: var(--error); }
+.failure-tag.tool { background: #fff7ed; color: #c2410c; }
+.failure-tag.model { background: #f3e8ff; color: #7c3aed; }
+.failure-tag.dependency { background: #dbeafe; color: #1d4ed8; }
+.failure-tag.agent { background: var(--error-bg); color: var(--error); }
+
+/* Trace table */
+.table-wrap {
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.table-wrap .table-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+table.trace {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+table.trace th {
+  background: #f8fafc;
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+table.trace td {
+  padding: 7px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+table.trace tr:hover td { background: #f8fafc; }
+table.trace tr.ok { background: var(--surface); }
+table.trace tr.error { background: var(--error-bg); }
+table.trace tr.running { background: var(--running-bg); }
+table.trace .num {
+  color: var(--text-secondary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 11px;
+}
+table.trace .model {
+  color: var(--text-secondary);
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+table.trace .nc { color: var(--text-muted); }
+table.trace .ttft-bold { font-weight: 700; }
+table.trace .ttft-yellow { color: var(--warning); }
+table.trace .ttft-red { color: var(--error); }
+
+/* Status badge */
+.status-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.status-badge.ok { background: var(--success-bg); color: var(--success); }
+.status-badge.error { background: var(--error-bg); color: var(--error); }
+.status-badge.running { background: var(--running-bg); color: var(--running); }
+.status-badge.unknown { background: #f1f5f9; color: var(--text-muted); }
+
+/* Compare table */
+table.cmp {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+table.cmp th {
+  background: #f8fafc;
+  color: var(--text-secondary);
+  text-align: right;
+  padding: 10px 14px;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+table.cmp th:first-child { text-align: left; }
+table.cmp th .agent-label {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+}
+table.cmp th .session-count {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+table.cmp td {
+  padding: 8px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+table.cmp td:first-child {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+table.cmp td.nc { color: var(--text-muted); }
+table.cmp tr:hover td { background: #f8fafc; }
+
+/* Compare agent selector */
+.cmp-agent-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+}
+.cmp-agent-bar .bar-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 4px;
+  font-weight: 500;
+}
+.cmp-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: all .15s;
+  color: var(--text-secondary);
+}
+.cmp-agent-chip input { margin: 0; cursor: pointer; accent-color: var(--accent); }
+.cmp-agent-chip.checked { background: var(--accent); color: #fff; border-color: var(--accent); }
+.cmp-agent-chip.checked input { accent-color: #fff; }
+.cmp-agent-bar .bar-action {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: auto;
+  text-decoration: none;
+}
+.cmp-agent-bar .bar-action:hover { text-decoration: underline; }
+
+/* Metric help icon */
+.metric-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  vertical-align: middle;
+  margin-left: 4px;
+  transition: background .15s, color .15s;
+  user-select: none;
+}
+.metric-help:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.metric-help-popup {
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  max-width: 420px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  white-space: normal;
+}
+
+/* Loading & empty */
+.empty { text-align: center; color: var(--text-muted); padding: 60px 20px; font-size: 14px; }
+.loading { text-align: center; color: var(--text-muted); padding: 30px; font-size: 13px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Agent Log Observatory</h1>
+  <div class="tabs">
+    <div class="tab active" id="tabSessions" onclick="switchTab('sessions')">Sessions</div>
+    <div class="tab" id="tabCompare" onclick="switchTab('compare')">Compare</div>
+    <div class="tab" id="tabEnvCheck" onclick="switchTab('envcheck')">Env Check</div>
+    <div class="tab" id="tabResources" onclick="switchTab('resources')">Resources</div>
+    <div class="tab" id="tabAnalytics" onclick="switchTab('analytics')">Analytics</div>
+    <div class="tab" id="tabSettings" onclick="switchTab('settings')">Settings</div>
+  </div>
+  <select id="agentFilter"><option value="">All Agents</option></select>
+  <input type="datetime-local" id="dateSince" title="开始时间（精确到分钟）" style="padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;outline:none;color-scheme:dark" />
+  <span style="color:rgba(255,255,255,.5);font-size:12px">~</span>
+  <input type="datetime-local" id="dateUntil" title="结束时间（精确到分钟）" style="padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;outline:none;color-scheme:dark" />
+  <button onclick="clearDateFilter()" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer">Clear</button>
+  <button onclick="refreshCurrentTab()" id="refreshBtn" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px">&#x21bb; Refresh</button>
+  <span id="envBadge" onclick="switchTab('envcheck')" style="cursor:pointer;font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);display:none" title="环境检查概览"></span>
+  <span class="ver" id="ver"></span>
+</div>
+<div class="layout">
+  <div class="sidebar" id="sidebar"><div class="loading">Loading sessions...</div></div>
+  <div class="main" id="main"><div class="empty">Select a session to view details</div></div>
+</div>
+<script>
+let allSessions = [];
+let currentSession = null;
+let healthData = {};
+let currentTab = 'sessions';
+
+async function init() {
+  try {
+    const h = await fetch('/api/health').then(r => r.json());
+    healthData = h.agents || {};
+    document.getElementById('ver').textContent = h.version;
+    const sel = document.getElementById('agentFilter');
+    for (const name of Object.keys(healthData)) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      sel.appendChild(opt);
+    }
+  } catch(e) { document.getElementById('ver').textContent = 'Error: ' + e.message; }
+  await loadSessions();
+  // Restore last active tab (survives browser refresh)
+  let savedTab = 'sessions';
+  try { savedTab = localStorage.getItem('alo_tab') || 'sessions'; } catch {}
+  if (savedTab !== 'sessions') switchTab(savedTab);
+  // Fetch env-check badge in background (non-blocking)
+  fetch('/api/env-check').then(r => r.json()).then(d => { envCheckData = d; updateEnvBadge(); }).catch(() => {});
+}
+
+async function loadSessions() {
+  const agent = document.getElementById('agentFilter').value;
+  const params = new URLSearchParams();
+  if (agent) params.set('agent', agent);
+  const since = document.getElementById('dateSince').value;
+  const until = document.getElementById('dateUntil').value;
+  if (since) params.set('since', since);
+  if (until) params.set('until', until);
+  const url = '/api/sessions' + (params.toString() ? '?' + params : '');
+  const data = await fetch(url).then(r => r.json());
+  allSessions = data.items || [];
+  renderSidebar();
+}
+
+function renderSidebar() {
+  const el = document.getElementById('sidebar');
+  if (!allSessions.length) { el.innerHTML = '<div class="empty">No sessions found</div>'; return; }
+  let html = '<div class="sidebar-header">Sessions (' + allSessions.length + ')</div>';
+  for (const s of allSessions) {
+    const agent = s.agent_object || '?';
+    const sid = (s.session_id || '').substring(0, 24);
+    const time = (s.started_at || '').substring(0, 10);
+    const isActive = currentSession && currentSession.agent === agent && currentSession.id === s.session_id;
+    html += `<div class="item${isActive ? ' active' : ''}" onclick="selectSession('${agent}','${s.session_id}')">
+      <span class="agent-badge ${agent}">${agent}</span>
+      <span class="time">${time}</span>
+      <div class="sid">${sid}</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function selectSession(agent, sessionId) {
+  currentSession = { agent, id: sessionId };
+  renderSidebar();
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="loading">Loading session details...</div>';
+  try {
+    const [metricsRes, callsRes, eventsRes, failuresRes, usageRes] = await Promise.all([
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/metrics`).then(r => r.json()).catch(() => ({items:[]})),
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/calls`).then(r => r.json()).catch(() => ({llm_calls:[],tool_calls:[]})),
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/events`).then(r => r.json()).catch(() => ({items:[]})),
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/failures`).then(r => r.json()).catch(() => ({diagnostics:[],summary:{}})),
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/usage`).then(r => r.json()).catch(() => ({items:[]})),
+    ]);
+    renderDetail(agent, sessionId, metricsRes.items || [], callsRes, eventsRes.items || [], failuresRes, usageRes.items || []);
+  } catch(e) { main.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function renderDetail(agent, sessionId, metrics, calls, events, failures, usage) {
+  const main = document.getElementById('main');
+  const m = metricMap(metrics);
+  const llmCalls = calls.llm_calls || [];
+  const toolCalls = calls.tool_calls || [];
+  const fsum = failures?.summary || {};
+  const totalFailures = (fsum.gateway||0)+(fsum.tool||0)+(fsum.model||0)+(fsum.dependency||0)+(fsum.agent||0);
+
+  let cards = '<div class="cards">';
+  cards += card('LLM Calls', m.llm_call_count, '', m.llm_call_count > 0 ? 'accent' : '');
+  cards += card('Tool Calls', m.tool_call_count, '', m.tool_call_count > 0 ? 'accent' : '');
+  cards += card('Steps', m.step_count, '', m.step_count > 0 ? 'accent' : '');
+  cards += card('Input Tokens', fmtNum(m.token_input), 'tokens');
+  cards += card('Output Tokens', fmtNum(m.token_output), 'tokens');
+  cards += card('Cache Hit', m.cache_hit_rate != null ? (m.cache_hit_rate*100).toFixed(1)+'%' : null, '', m.cache_hit_rate > 0.8 ? 'success' : (m.cache_hit_rate > 0.5 ? 'warning' : 'error'));
+  cards += card('Turn E2E', fmtDur(m.turn_e2e_ms), '');
+  cards += card('Lifespan', fmtDur(m.session_lifespan_ms), '');
+  cards += card('Credits', m.credits != null ? m.credits.toFixed(2) : null, 'credits');
+  cards += card('TTFT', fmtDur(m.llm_attempt_ttft_ms), '');
+  cards += card('Human Confirm', m.human_confirm_count, '', m.human_confirm_count > 0 ? 'warning' : '');
+  cards += card('Success Rate', m.success_rate != null ? (m.success_rate*100).toFixed(0)+'%' : null, '', m.success_rate >= 0.95 ? 'success' : 'error');
+  cards += card('Failures', totalFailures || null, '', totalFailures > 0 ? 'error' : 'success');
+  cards += '</div>';
+
+  let failHtml = renderFailures(failures);
+  let table = renderTraceTable(agent, events, llmCalls, toolCalls, usage);
+  main.innerHTML = `<div class="section-title">${agent} <span class="sub">${(sessionId||'').substring(0,32)}</span></div>${cards}${failHtml}${table}`;
+}
+
+function card(key, value, unit, colorClass) {
+  const nc = value == null || value === '';
+  const cls = nc ? 'card nc' : 'card';
+  const v = nc ? '—' : value;
+  const vClass = colorClass ? ' ' + colorClass : '';
+  return `<div class="${cls}"><div class="k">${key}</div><div class="v${vClass}">${v}</div><div class="u">${unit||''}</div></div>`;
+}
+
+function metricMap(metrics) {
+  const map = {};
+  for (const m of metrics) {
+    if (map[m.metric] == null || m.state === 'captured') map[m.metric] = m.value;
+  }
+  return map;
+}
+
+function renderFailures(failures) {
+  if (!failures) return '';
+  const diag = failures.diagnostics || [];
+  const sum = failures.summary || {};
+  const total = (sum.gateway||0)+(sum.tool||0)+(sum.model||0)+(sum.dependency||0)+(sum.agent||0);
+  if (total === 0) return '';
+
+  let html = '<div class="failure-section">';
+  html += '<div class="section-title" style="font-size:13px">Failure Attribution <span class="sub">' + total + ' total</span></div>';
+  html += '<div class="failure-tags">';
+  for (const [cat, count] of Object.entries(sum)) {
+    if (!count) continue;
+    html += `<span class="failure-tag ${cat}">${cat}: ${count}</span>`;
+  }
+  html += '</div>';
+  if (diag.length) {
+    html += '<div class="table-wrap"><table class="trace"><thead><tr><th>Category</th><th>Entity</th><th>Tool</th><th>Rule</th><th>Message</th><th>Evidence</th></tr></thead><tbody>';
+    for (const d of diag.slice(0, 20)) {
+      html += `<tr class="error"><td><span class="failure-tag ${d.category}">${d.category}</span></td><td>${d.entity||'—'}</td><td>${d.tool_name||'—'}</td><td>${d.rule||'—'}</td><td style="font-size:11px;color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis">${(d.message||d.reason||'').substring(0,100)}</td><td>${d.evidence_grade||'—'}</td></tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderTraceTable(agent, events, llmCalls, toolCalls, usage) {
+  if (!events.length && !llmCalls.length && !toolCalls.length) {
+    return '<div class="empty">No trace data available for this session</div>';
+  }
+  let rows = buildTraceRows(agent, events, llmCalls, toolCalls, usage);
+  if (!rows.length) return '<div class="empty">No trace rows could be constructed</div>';
+
+  let html = '<div class="table-wrap"><div class="table-header">Trace (' + rows.length + ' steps)</div><table class="trace"><thead><tr>';
+  html += '<th style="width:40px">#</th><th style="width:70px">Time</th><th>Model</th><th>Action</th>';
+  html += '<th class="num" style="width:110px">Input\\Cache</th><th class="num" style="width:80px">Output</th>';
+  html += '<th class="num" style="width:70px">Duration</th><th class="num" style="width:70px">TTFT</th><th style="width:70px">Status</th>';
+  html += '</tr></thead><tbody>';
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const cls = r.status === 'error' ? 'error' : (r.status === 'running' ? 'running' : 'ok');
+    const ttftCls = r.ttft != null ? ttftClass(r.ttft) : '';
+    html += `<tr class="${cls}">`;
+    html += `<td style="color:var(--text-muted)">${i+1}</td>`;
+    html += `<td>${r.time || '<span class="nc">—</span>'}</td>`;
+    html += `<td class="model">${r.model || '<span class="nc">—</span>'}</td>`;
+    html += `<td>${r.action || '<span class="nc">—</span>'}</td>`;
+    html += `<td class="num">${r.inputCache || '<span class="nc">—</span>'}</td>`;
+    html += `<td class="num">${r.output || '<span class="nc">—</span>'}</td>`;
+    html += `<td class="num">${r.duration || '<span class="nc">—</span>'}</td>`;
+    html += `<td class="num ${ttftCls}">${r.ttft != null ? fmtDur(r.ttft) : '<span class="nc">—</span>'}</td>`;
+    html += `<td>${statusBadge(r.status)}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function buildTraceRows(agent, events, llmCalls, toolCalls, usage) {
+  const usageMap = {};
+  if (usage && usage.length) {
+    for (const u of usage) {
+      const key = u.scope_id || u.usage_record_id;
+      if (key) usageMap[key] = u;
+    }
+  }
+  const items = [];
+
+  for (const ev of events) {
+    if (ev.event_category === 'agent.input') {
+      items.push({ sortKey: ev.source_seq ?? 0, time: ev.occurred_at ? ev.occurred_at.substring(11,19) : null, model: null, action: 'user input', inputCache: null, output: null, duration: null, ttft: null, status: 'ok' });
+    }
+  }
+  for (const lc of llmCalls) {
+    if (lc.is_retry) {
+      items.push({ sortKey: lc.requested_at || 0, time: lc.requested_at ? new Date(lc.requested_at).toLocaleTimeString('zh-CN',{hour12:false}) : null, model: lc.routed_model || lc.requested_model, action: 'retry', inputCache: null, output: null, duration: null, ttft: null, status: lc.status || 'ok' });
+      continue;
+    }
+    const u = usageMap[lc.llm_call_id];
+    const inputCache = u ? (fmtNum(u.input) + '\\' + fmtNum(u.cache_read)) : null;
+    items.push({
+      sortKey: lc.requested_at || lc.first_output_at || 0,
+      time: lc.requested_at ? new Date(lc.requested_at).toLocaleTimeString('zh-CN',{hour12:false}) : (lc.first_output_at ? new Date(lc.first_output_at).toLocaleTimeString('zh-CN',{hour12:false}) : null),
+      model: lc.routed_model || lc.requested_model,
+      action: 'LLM generation',
+      inputCache: inputCache, output: u ? fmtNum(u.output) : null,
+      duration: lc.generation_ended_at && lc.requested_at ? lc.generation_ended_at - lc.requested_at : (lc.generation_ended_at && lc.first_output_at ? lc.generation_ended_at - lc.first_output_at : null),
+      ttft: lc.first_output_at && lc.requested_at ? lc.first_output_at - lc.requested_at : null,
+      status: lc.status || 'unknown',
+    });
+  }
+  for (const tc of toolCalls) {
+    items.push({
+      sortKey: tc.started_at || 0,
+      time: tc.started_at ? new Date(tc.started_at).toLocaleTimeString('zh-CN',{hour12:false}) : null,
+      model: null, action: tc.tool_name ? ('tool: ' + tc.tool_name) : 'tool call',
+      inputCache: null, output: null,
+      duration: tc.ended_at && tc.started_at ? tc.ended_at - tc.started_at : null,
+      ttft: null, status: tc.status || 'unknown',
+    });
+  }
+  for (const ev of events) {
+    if (ev.event_category === 'other' && ev.event_subtype === 'compaction') {
+      items.push({ sortKey: ev.source_seq ?? 9999, time: ev.occurred_at ? ev.occurred_at.substring(11,19) : null, model: null, action: 'compaction', inputCache: null, output: null, duration: null, ttft: null, status: 'ok' });
+    }
+    if (ev.event_category === 'other' && ev.event_subtype === 'human_confirm') {
+      items.push({ sortKey: ev.source_seq ?? 9999, time: ev.occurred_at ? ev.occurred_at.substring(11,19) : null, model: null, action: 'human confirm', inputCache: null, output: null, duration: null, ttft: null, status: 'ok' });
+    }
+  }
+
+  items.sort((a, b) => (a.sortKey || 0) - (b.sortKey || 0));
+  for (const r of items) {
+    if (r.duration != null) r.duration = fmtDur(r.duration);
+    if (r.inputCache === 'null\\null') r.inputCache = null;
+  }
+  return items;
+}
+
+function statusBadge(status) {
+  if (status === 'ok') return '<span class="status-badge ok">ok</span>';
+  if (status === 'error') return '<span class="status-badge error">error</span>';
+  if (status === 'running') return '<span class="status-badge running">running</span>';
+  return '<span class="status-badge unknown">—</span>';
+}
+
+function ttftClass(ms) {
+  if (ms > 60000) return 'ttft-bold ttft-red';
+  if (ms > 30000) return 'ttft-bold ttft-yellow';
+  if (ms > 10000) return 'ttft-bold';
+  return '';
+}
+
+function fmtNum(n) {
+  if (n == null) return null;
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function fmtDur(ms) {
+  if (ms == null) return null;
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return (ms/1000).toFixed(1) + 's';
+  return (ms/60000).toFixed(2) + 'min';
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  try { localStorage.setItem('alo_tab', tab); } catch {}
+  destroyResourceCharts();
+  document.getElementById('tabSessions').classList.toggle('active', tab === 'sessions');
+  document.getElementById('tabCompare').classList.toggle('active', tab === 'compare');
+  document.getElementById('tabEnvCheck').classList.toggle('active', tab === 'envcheck');
+  document.getElementById('tabResources').classList.toggle('active', tab === 'resources');
+  document.getElementById('tabAnalytics').classList.toggle('active', tab === 'analytics');
+  document.getElementById('tabSettings').classList.toggle('active', tab === 'settings');
+  const sidebar = document.getElementById('sidebar');
+  const main = document.getElementById('main');
+  if (tab === 'compare') {
+    sidebar.style.display = 'none';
+    main.innerHTML = '<div class="loading">Loading comparison...</div>';
+    loadCompare();
+  } else if (tab === 'envcheck') {
+    sidebar.style.display = 'none';
+    main.innerHTML = '<div class="loading">Checking environment...</div>';
+    loadEnvCheck();
+  } else if (tab === 'resources') {
+    sidebar.style.display = 'none';
+    main.innerHTML = '<div class="loading">Scanning system resources...</div>';
+    loadResources();
+  } else if (tab === 'analytics') {
+    sidebar.style.display = 'none';
+    loadAnalytics();
+  } else if (tab === 'settings') {
+    sidebar.style.display = 'none';
+    main.innerHTML = '<div class="loading">Loading settings...</div>';
+    loadSettings();
+  } else {
+    sidebar.style.display = '';
+    main.innerHTML = '<div class="empty">Select a session to view details</div>';
+  }
+}
+
+function refreshCurrentTab() {
+  const btn = document.getElementById('refreshBtn');
+  btn.textContent = '\u21bb Loading...';
+  btn.style.opacity = '0.6';
+  const done = () => { btn.innerHTML = '&#x21bb; Refresh'; btn.style.opacity = '1'; };
+  if (currentTab === 'compare') loadCompare().then(done).catch(done);
+  else if (currentTab === 'envcheck') loadEnvCheck().then(done).catch(done);
+  else if (currentTab === 'resources') loadResources().then(done).catch(done);
+  else if (currentTab === 'analytics') loadAnalytics().then(done).catch(done);
+  else if (currentTab === 'settings') loadSettings().then(done).catch(done);
+  else { loadSessions().then(done).catch(done); }
+}
+
+let resourceData = null;
+let resourceAgentFilter = null;
+let resourceCharts = {};
+
+function destroyResourceCharts() {
+  for (const [k, c] of Object.entries(resourceCharts)) {
+    try { c.destroy(); } catch {}
+    delete resourceCharts[k];
+  }
+}
+
+async function loadResources() {
+  const main = document.getElementById('main');
+  try {
+    const data = await fetch('/api/resources').then(r => r.json());
+    resourceData = data;
+    renderResources();
+  } catch(e) { destroyResourceCharts(); main.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function renderResources() {
+  const main = document.getElementById('main');
+  const data = resourceData;
+  if (!data) { main.innerHTML = '<div class="empty">No data</div>'; return; }
+  const agents = data.agents || {};
+  const agentNames = Object.keys(agents).filter(n => !n.startsWith('_'));
+  if (!agentNames.length) { main.innerHTML = '<div class="empty">No data</div>'; return; }
+
+  const fmtMB = v => v != null ? (v >= 1024 ? (v/1024).toFixed(1)+' GB' : v.toFixed(1)+' MB') : '—';
+  const fmtSec = v => v != null ? (v >= 3600 ? (v/3600).toFixed(1)+'h' : v >= 60 ? (v/60).toFixed(1)+'min' : v.toFixed(1)+'s') : '—';
+
+  let html = '<div class="section-title">System Resource Usage <span class="sub">disk = data directory size · memory/cpu = live processes · avg CPU% = cpu_time / uptime</span></div>';
+
+    // ---- Trend + Bar charts ----
+    const chartAgents = agentNames.filter(n => agents[n].running);
+    if (chartAgents.length > 0) {
+      // Trend chart (full width)
+      const metrics = [
+        { key: 'mem',     label: 'Memory (MB)' },
+        { key: 'avg_cpu', label: 'Avg CPU %' },
+        { key: 'cpu',     label: 'CPU Time (s)' },
+        { key: 'disk',    label: 'Disk (MB)' },
+        { key: 'proc',    label: 'Processes' },
+      ];
+      const curMetric = resourceMetric || 'mem';
+      let metricBtns = metrics.map(m => {
+        const active = m.key === curMetric;
+        const style = active ? 'background:var(--accent);color:#fff;border:none' : 'background:var(--surface);border:1px solid var(--border)';
+        return `<button onclick="selectResourceMetric('${m.key}')" style="padding:3px 10px;border-radius:6px;font-size:12px;cursor:pointer;${style}">${m.label}</button>`;
+      }).join(' ');
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <div><span style="font-weight:600">Resource Trend</span> <span style="font-size:12px;color:var(--text-muted)">— over time (60s sampling)</span></div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">${metricBtns}</div>
+        </div>
+        <canvas id="chartResourceTrend" style="max-height:300px"></canvas>
+        <div id="trendEmpty" style="display:none;text-align:center;color:var(--text-muted);font-size:13px;padding:40px 0">No history data yet — sampling starts on server boot, first point after 60s</div>
+      </div>`;
+      // Bar chart (current snapshot)
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px">
+        <div style="font-weight:600;margin-bottom:4px">Current Snapshot — Memory · CPU(min) · Disk(MB)</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">log scale</div>
+        <canvas id="chartResourceBar" style="max-height:260px"></canvas>
+      </div>`;
+    }
+
+    html += '<table class="cmp"><thead><tr><th>Agent</th><th>Status</th><th>Processes</th><th>Memory</th><th>CPU Time</th><th>Avg CPU%</th><th>Disk Usage</th></tr></thead><tbody>';
+    for (const name of agentNames) {
+      const a = agents[name];
+      const active = resourceAgentFilter === name;
+      const status = a.running ? '<span style="color:var(--success);font-weight:600">Running</span>' : '<span style="color:var(--text-muted)">Stopped</span>';
+      const labelStyle = active ? 'cursor:pointer;background:var(--accent-light);padding:2px 8px;border-radius:4px' : 'cursor:pointer;padding:2px 8px;border-radius:4px';
+      html += `<tr><td><div class="agent-label" style="${labelStyle}" onclick="toggleResourceFilter('${name}')">${name}</div></td><td>${status}</td>`;
+      html += `<td>${a.process_count || 0}</td>`;
+      html += `<td class="num">${fmtMB(a.memory_mb)}</td>`;
+      html += `<td class="num">${fmtSec(a.cpu_time_s)}</td>`;
+      html += `<td class="num">${a.avg_cpu_pct != null ? a.avg_cpu_pct.toFixed(1) + '%' : '—'}</td>`;
+      html += `<td class="num">${fmtMB(a.disk_mb)}</td></tr>`;
+    }
+    html += '</tbody></table>';
+
+    const filteredAgents = resourceAgentFilter ? [resourceAgentFilter] : agentNames;
+    const filterLabel = resourceAgentFilter ? ` — ${resourceAgentFilter}` : ' — All';
+    html += `<div class="section-title" style="margin-top:24px">Process Details <span class="sub">${filterLabel} · <a onclick="toggleResourceFilter(null)" style="cursor:pointer;color:var(--accent)">Reset</a></span></div>`;
+    html += '<table class="cmp"><thead><tr><th>Agent</th><th>PID</th><th>Process Name</th><th>Memory</th><th>CPU Time</th><th>Avg CPU%</th><th>Executable</th></tr></thead><tbody>';
+    for (const name of filteredAgents) {
+      const a = agents[name];
+      if (!a) continue;
+      if (!a.processes || a.processes.length === 0) {
+        html += `<tr><td>${name}</td><td colspan="6" class="nc">No running processes</td></tr>`;
+        continue;
+      }
+      for (const p of a.processes) {
+        html += `<tr><td>${name}</td><td>${p.pid}</td><td>${p.name}</td><td class="num">${fmtMB(p.memory_mb)}</td><td class="num">${fmtSec(p.cpu_time_s)}</td><td class="num">${p.avg_cpu_pct != null ? p.avg_cpu_pct.toFixed(1) + '%' : '—'}</td><td style="font-size:11px;color:var(--text-muted);word-break:break-all">${p.exe}</td></tr>`;
+      }
+    }
+    html += '</tbody></table>';
+    html += `<div style="text-align:right;color:var(--text-muted);font-size:11px;margin-top:8px">Generated at ${data.generated_at || ''}</div>`;
+    main.innerHTML = html;
+
+    // ---- Render charts ----
+    destroyResourceCharts();
+    const runningAgents = agentNames.filter(n => agents[n].running);
+    if (runningAgents.length > 0) {
+      // Trend chart: fetch history and render line chart
+      loadResourceTrend(runningAgents);
+
+      // Bar chart: current snapshot
+      const barCtx = document.getElementById('chartResourceBar');
+      if (barCtx) {
+        resourceCharts.bar = new Chart(barCtx.getContext('2d'), {
+          type: 'bar',
+          data: {
+            labels: runningAgents,
+            datasets: [
+              { label: 'Memory (MB)', data: runningAgents.map(n => Math.round((agents[n].memory_mb || 0) * 10) / 10), backgroundColor: '#2563ebbb' },
+              { label: 'CPU Time (min)', data: runningAgents.map(n => Math.round((agents[n].cpu_time_s || 0) / 60 * 100) / 100), backgroundColor: '#059669bb' },
+              { label: 'Disk (MB)', data: runningAgents.map(n => Math.round((agents[n].disk_mb || 0) * 10) / 10), backgroundColor: '#d97706bb' },
+            ],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            indexAxis: 'y',
+            plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+            scales: {
+              x: { type: 'logarithmic', beginAtZero: true, title: { display: true, text: 'log scale' } },
+              y: { ticks: { font: { size: 11 } } },
+            },
+          }
+        });
+      }
+    }
+}
+
+let resourceMetric = 'mem';
+
+function selectResourceMetric(key) {
+  resourceMetric = key;
+  renderResources();
+}
+
+async function loadResourceTrend(runningAgents) {
+  const canvas = document.getElementById('chartResourceTrend');
+  const emptyDiv = document.getElementById('trendEmpty');
+  if (!canvas) return;
+  try {
+    const resp = await fetch('/api/resources/history');
+    const data = await resp.json();
+    const points = data.points || [];
+    if (!points.length) {
+      canvas.style.display = 'none';
+      if (emptyDiv) emptyDiv.style.display = '';
+      return;
+    }
+    const metric = resourceMetric || 'mem';
+    // 7 distinct styles: color + dash pattern + width
+    const lineStyles = [
+      { color: '#2563eb', dash: [],           width: 2.5 }, // ── solid blue
+      { color: '#dc2626', dash: [8, 4],       width: 2   }, // ── ── ── dashed red
+      { color: '#059669', dash: [2, 3],       width: 2   }, // ·· ·· ·· dotted green
+      { color: '#d97706', dash: [10, 3, 2, 3], width: 2 }, // ─·─·─ dash-dot orange
+      { color: '#7c3aed', dash: [12, 6],      width: 3   }, // ─── ─── ─── long-dash purple (thick)
+      { color: '#0891b2', dash: [6, 3, 6, 3, 2, 3], width: 2 }, // ─·─·── cyan
+      { color: '#be185d', dash: [14, 4, 2, 4], width: 2 }, // ──·─·── pink
+    ];
+    const datasets = runningAgents.map((name, i) => {
+      const pts = points
+        .filter(p => p[name] && p[name][metric] != null)
+        .map(p => ({ x: p.ts, y: p[name][metric] }));
+      const s = lineStyles[i % lineStyles.length];
+      return {
+        label: name,
+        data: pts,
+        borderColor: s.color,
+        backgroundColor: s.color + '15',
+        pointRadius: 1.5,
+        pointStyle: 'rectRot',
+        borderWidth: s.width,
+        borderDash: s.dash,
+        tension: 0.3,
+        spanGaps: true,
+      };
+    });
+    const ctx = canvas.getContext('2d');
+    resourceCharts.trend = new Chart(ctx, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+        scales: {
+          x: {
+            type: 'time',
+            time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
+            ticks: { font: { size: 10 }, maxRotation: 0 },
+          },
+          y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+        },
+      }
+    });
+  } catch (e) {
+    canvas.style.display = 'none';
+    if (emptyDiv) { emptyDiv.style.display = ''; emptyDiv.textContent = 'Error loading history: ' + e.message; }
+  }
+}
+
+function toggleResourceFilter(agent) {
+  resourceAgentFilter = (resourceAgentFilter === agent || agent === null) ? null : agent;
+  renderResources();
+}
+
+let _helpPopup = null;
+function showMetricHelp(e, desc) {
+  if (_helpPopup) { _helpPopup.remove(); _helpPopup = null; }
+  if (!desc) return;
+  const popup = document.createElement('div');
+  popup.className = 'metric-help-popup';
+  popup.textContent = desc;
+  document.body.appendChild(popup);
+  const rect = e.target.getBoundingClientRect();
+  let x = rect.left;
+  let y = rect.bottom + 6;
+  const pw = popup.offsetWidth;
+  const ph = popup.offsetHeight;
+  if (x + pw > window.innerWidth - 8) x = window.innerWidth - pw - 8;
+  if (y + ph > window.innerHeight - 8) y = rect.top - ph - 6;
+  popup.style.left = x + 'px';
+  popup.style.top = y + 'px';
+  _helpPopup = popup;
+  e.stopPropagation();
+}
+document.addEventListener('click', () => {
+  if (_helpPopup) { _helpPopup.remove(); _helpPopup = null; }
+}, true);
+
+let compareData = null;          // cached compare payload
+let compareSelectedAgents = null; // Set<string> of agent names to show; null = all
+
+function compareAgentList() {
+  if (!compareData || !compareData.agents) return [];
+  return Object.keys(compareData.agents);
+}
+
+// ==================== Env Check ====================
+
+let envCheckData = null;
+
+async function loadEnvCheck() {
+  const main = document.getElementById('main');
+  try {
+    envCheckData = await fetch('/api/env-check').then(r => r.json());
+    updateEnvBadge();
+    renderEnvCheck();
+  } catch(e) { main.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function updateEnvBadge() {
+  const badge = document.getElementById('envBadge');
+  if (!envCheckData) { badge.style.display = 'none'; return; }
+  const sysOverall = envCheckData.system?.overall;
+  const agentEntries = Object.entries(envCheckData.agents || {});
+  const total = agentEntries.length + 1; // +1 for system
+  let ok = 0, warn = 0, err = 0;
+  if (sysOverall === 'ok') ok++;
+  else if (sysOverall === 'warning') warn++;
+  else if (sysOverall) err++;
+  for (const [, info] of agentEntries) {
+    if (info.overall === 'ok') ok++;
+    else if (info.overall === 'warning') warn++;
+    else err++;
+  }
+  badge.style.display = '';
+  if (err > 0) {
+    badge.textContent = `\u274C ${ok}/${total}`;
+    badge.style.background = 'rgba(239,68,68,.25)';
+    badge.style.borderColor = 'rgba(239,68,68,.5)';
+  } else if (warn > 0) {
+    badge.textContent = `\u26A0\uFE0F ${ok}/${total}`;
+    badge.style.background = 'rgba(245,158,11,.25)';
+    badge.style.borderColor = 'rgba(245,158,11,.5)';
+  } else {
+    badge.textContent = `\u2705 ${ok}/${total}`;
+    badge.style.background = 'rgba(34,197,94,.2)';
+    badge.style.borderColor = 'rgba(34,197,94,.4)';
+  }
+}
+
+function renderEnvCheck() {
+  const main = document.getElementById('main');
+  const sys = envCheckData?.system;
+  const agents = envCheckData?.agents || {};
+  const names = Object.keys(agents);
+  if (!sys && !names.length) { main.innerHTML = '<div class="empty">No data</div>'; return; }
+
+  const iconMap = { ok: '\u2705', warning: '\u26A0\uFE0F', error: '\u274C', info: '\u2139\uFE0F' };
+  const colorMap = { ok: '#22c55e', warning: '#f59e0b', error: '#ef4444', info: '#3b82f6' };
+
+  function renderChecks(checks) {
+    let h = '';
+    for (const chk of (checks || [])) {
+      const ci = iconMap[chk.status] || '';
+      const cc = colorMap[chk.status] || '#999';
+      h += '<div style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;font-size:13px">';
+      h += `<span style="flex-shrink:0;width:20px;text-align:center">${ci}</span>`;
+      h += '<div style="flex:1">';
+      h += `<span style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${chk.name}</span>`;
+      h += `<div style="color:${cc === '#3b82f6' ? 'var(--text-secondary)' : 'var(--text)'}">${chk.detail || ''}</div>`;
+      if (chk.fix) {
+        h += `<div style="color:var(--text-muted);font-size:12px;margin-top:2px">\u2192 ${chk.fix}</div>`;
+      }
+      h += '</div></div>';
+    }
+    return h;
+  }
+
+  function renderSection(title, info, accent) {
+    const overallIcon = iconMap[info.overall] || '';
+    const overallColor = colorMap[info.overall] || '#999';
+    let h = `<div style="background:var(--surface);border-radius:10px;padding:14px 16px;margin-bottom:12px;border:1px solid var(--border);${accent ? 'border-left:3px solid ' + overallColor : ''}">`;
+    h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">`;
+    h += `<span style="font-size:16px">${overallIcon}</span>`;
+    h += `<span style="font-weight:600;font-size:15px;color:${overallColor}">${title}</span>`;
+    h += `<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase">${info.overall}</span>`;
+    h += '</div>';
+    h += renderChecks(info.checks);
+    h += '</div>';
+    return h;
+  }
+
+  let html = '<div style="padding:16px;max-width:900px">';
+  html += '<h2 style="margin:0 0 4px">Environment Check</h2>';
+  html += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 16px">Observatory \u7cfb\u7edf\u5065\u5eb7\u68c0\u67e5\uff1a\u7cfb\u7edf\u7ea7\uff08Node/SQLite/\u914d\u7f6e/\u9002\u914d\u5668/\u78c1\u76d8\uff09+ \u6bcf\u4e2a Agent \uff08\u6570\u636e\u6e90/session/\u8fdb\u7a0b/\u91c7\u96c6\u57fa\u7840\u8bbe\u65bd/\u6570\u636e\u65f6\u6548/\u5df2\u77e5\u9650\u5236\uff09</p>';
+
+  // summary bar
+  let okCount = 0, warnCount = 0, errCount = 0, infoCount = 0;
+  const allSections = [sys, ...Object.values(agents)].filter(Boolean);
+  for (const info of allSections) {
+    if (info.overall === 'ok') okCount++;
+    else if (info.overall === 'warning') warnCount++;
+    else if (info.overall === 'error') errCount++;
+  }
+  html += '<div style="display:flex;gap:12px;margin-bottom:20px;font-size:13px;flex-wrap:wrap">';
+  html += `<span style="color:#22c55e">\u2705 ${okCount} OK</span>`;
+  if (warnCount) html += `<span style="color:#f59e0b">\u26A0\uFE0F ${warnCount} Warning</span>`;
+  if (errCount) html += `<span style="color:#ef4444">\u274C ${errCount} Error</span>`;
+  html += `<span style="color:var(--text-muted)">${allSections.length} sections (${names.length} agents + system)</span>`;
+  html += '</div>';
+
+  // System section
+  if (sys) html += renderSection('System', sys, true);
+
+  // Agent sections
+  for (const name of names) {
+    html += renderSection(name, agents[name], true);
+  }
+
+  html += '</div>';
+  main.innerHTML = html;
+}
+
+// ==================== Settings ====================
+
+let settingsData = null;
+
+async function loadSettings() {
+  const main = document.getElementById('main');
+  try {
+    const [settings, dbStats] = await Promise.all([
+      fetch('/api/settings').then(r => r.json()),
+      fetch('/api/db-stats').then(r => r.json()),
+    ]);
+    settingsData = { settings, dbStats };
+    renderSettings();
+  } catch(e) { main.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function renderSettings() {
+  const main = document.getElementById('main');
+  const s = settingsData?.settings;
+  const db = settingsData?.dbStats;
+  if (!s) { main.innerHTML = '<div class="empty">No data</div>'; return; }
+
+  const fmtInterval = (ms) => ms >= 60000 ? (ms / 60000).toFixed(0) + ' min' : (ms / 1000).toFixed(0) + ' s';
+
+  let html = '<div style="padding:16px;max-width:700px">';
+
+  // ---- DB Settings ----
+  html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px">';
+  html += '<div style="font-weight:600;margin-bottom:12px;font-size:15px">Database Cache</div>';
+
+  // DB stats
+  if (db) {
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">';
+    html += `<div style="background:var(--bg);border-radius:8px;padding:10px"><div style="font-size:11px;color:var(--text-muted)">Sessions</div><div style="font-size:20px;font-weight:600">${db.session_count}</div></div>`;
+    html += `<div style="background:var(--bg);border-radius:8px;padding:10px"><div style="font-size:11px;color:var(--text-muted)">Metrics</div><div style="font-size:20px;font-weight:600">${db.metric_count}</div></div>`;
+    html += `<div style="background:var(--bg);border-radius:8px;padding:10px"><div style="font-size:11px;color:var(--text-muted)">Resource Snapshots</div><div style="font-size:20px;font-weight:600">${db.snapshot_count}</div></div>`;
+    html += `<div style="background:var(--bg);border-radius:8px;padding:10px"><div style="font-size:11px;color:var(--text-muted)">Retention</div><div style="font-size:20px;font-weight:600">${db.retention_days}d</div></div>`;
+    html += '</div>';
+
+    // Sync log
+    if (db.last_sync && db.last_sync.length > 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Last sync:</div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">';
+      for (const sl of db.last_sync) {
+        const ago = Math.round((Date.now() - sl.synced_at) / 1000);
+        const errColor = sl.error ? '#ef4444' : 'var(--text-muted)';
+        html += `<span style="background:var(--bg);border-radius:6px;padding:4px 8px;font-size:11px">${sl.agent}: ${sl.new_sessions}/${sl.total_sessions} new <span style="color:${errColor}">${sl.error ? 'err' : ago + 's ago'}</span></span>`;
+      }
+      html += '</div>';
+    }
+  }
+
+  // Editable settings form
+  html += '<div style="border-top:1px solid var(--border);padding-top:14px">';
+  html += '<div style="font-weight:600;margin-bottom:10px;font-size:13px">Configuration</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:12px">';
+
+  // Retention days
+  html += '<div>';
+  html += '<label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">Retention (days) — metrics/snapshots older than this are auto-cleaned</label>';
+  html += `<input id="setRetention" type="number" min="1" max="365" value="${s.db.retentionDays}" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />`;
+  html += '</div>';
+
+  // Sync interval
+  html += '<div>';
+  html += '<label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">Sync Interval (minutes) — how often to sync from Agent sources</label>';
+  const syncMin = Math.round(s.db.syncIntervalMs / 60000);
+  html += `<input id="setSyncMin" type="number" min="1" max="1440" value="${syncMin}" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />`;
+  html += '</div>';
+
+  // Buttons
+  html += '<div style="display:flex;gap:8px;margin-top:4px">';
+  html += '<button onclick="saveSettings()" style="padding:8px 20px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:13px;cursor:pointer;font-weight:600">Save</button>';
+  html += '<button onclick="triggerSync()" style="padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:var(--surface);font-size:13px;cursor:pointer">Sync Now</button>';
+  html += '<button onclick="cleanDB()" style="padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:var(--surface);font-size:13px;cursor:pointer;color:#dc2626">Clean Old Data</button>';
+  html += '</div>';
+  html += '<div id="settingsMsg" style="font-size:12px;margin-top:8px;min-height:16px"></div>';
+  html += '</div>';
+  html += '</div>';
+
+  // ---- System Info ----
+  html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px">';
+  html += '<div style="font-weight:600;margin-bottom:12px;font-size:15px">System</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">';
+  html += `<div><span style="color:var(--text-muted)">Port</span><br><b>${s.system.port}</b></div>`;
+  html += `<div><span style="color:var(--text-muted)">Timezone</span><br><b>${s.system.timezone}</b></div>`;
+  html += `<div><span style="color:var(--text-muted)">Version</span><br><b>${s.system.version}</b></div>`;
+  html += `<div><span style="color:var(--text-muted)">Sync Interval</span><br><b>${fmtInterval(s.db.syncIntervalMs)}</b></div>`;
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+  main.innerHTML = html;
+}
+
+async function saveSettings() {
+  const retention = Number(document.getElementById('setRetention').value);
+  const syncMin = Number(document.getElementById('setSyncMin').value);
+  const msg = document.getElementById('settingsMsg');
+  if (!retention || retention < 1) { msg.innerHTML = '<span style="color:#ef4444">Retention must be >= 1</span>'; return; }
+  if (!syncMin || syncMin < 1) { msg.innerHTML = '<span style="color:#ef4444">Sync interval must be >= 1 minute</span>'; return; }
+  msg.innerHTML = '<span style="color:var(--text-muted)">Saving...</span>';
+  try {
+    const resp = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ db: { retentionDays: retention, syncIntervalMs: syncMin * 60000 } }),
+    });
+    const result = await resp.json();
+    if (result.status === 'ok') {
+      msg.innerHTML = '<span style="color:#22c55e">✓ Saved — retention=' + result.db.retentionDays + 'd, sync=' + fmtMin(result.db.syncIntervalMs) + '</span>';
+      setTimeout(loadSettings, 1500);
+    } else {
+      msg.innerHTML = '<span style="color:#ef4444">Error: ' + (result.error || 'unknown') + '</span>';
+    }
+  } catch (e) {
+    msg.innerHTML = '<span style="color:#ef4444">Error: ' + e.message + '</span>';
+  }
+}
+
+function fmtMin(ms) { return ms >= 60000 ? (ms / 60000).toFixed(0) + ' min' : (ms / 1000).toFixed(0) + ' s'; }
+
+async function triggerSync() {
+  const msg = document.getElementById('settingsMsg');
+  if (msg) msg.innerHTML = '<span style="color:var(--text-muted)">Triggering sync...</span>';
+  try {
+    await fetch('/api/sync');
+    if (msg) msg.innerHTML = '<span style="color:#22c55e">✓ Sync started</span>';
+    setTimeout(loadSettings, 3000);
+  } catch (e) {
+    if (msg) msg.innerHTML = '<span style="color:#ef4444">Error: ' + e.message + '</span>';
+  }
+}
+
+async function cleanDB() {
+  const msg = document.getElementById('settingsMsg');
+  if (msg) msg.innerHTML = '<span style="color:var(--text-muted)">Cleaning...</span>';
+  try {
+    const resp = await fetch('/api/clean-db', { method: 'POST' });
+    const result = await resp.json();
+    if (msg) msg.innerHTML = '<span style="color:#22c55e">✓ Cleaned ' + result.deleted_metrics + ' old metrics (retention=' + result.retention_days + 'd)</span>';
+    setTimeout(loadSettings, 1500);
+  } catch (e) {
+    if (msg) msg.innerHTML = '<span style="color:#ef4444">Error: ' + e.message + '</span>';
+  }
+}
+
+async function loadCompare() {
+  const main = document.getElementById('main');
+  try {
+    const params = new URLSearchParams({ limit: '20' });
+    const since = document.getElementById('dateSince').value;
+    const until = document.getElementById('dateUntil').value;
+    if (since) params.set('since', since);
+    if (until) params.set('until', until);
+    compareData = await fetch('/api/metrics/compare?' + params).then(r => r.json());
+    // first load: default to all agents selected
+    const all = compareAgentList();
+    if (!compareSelectedAgents || !all.every(n => compareSelectedAgents.has(n))) {
+      compareSelectedAgents = new Set(all);
+    }
+    renderCompare();
+  } catch(e) { main.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+function toggleCompareAgent(name, checked) {
+  if (compareSelectedAgents == null) compareSelectedAgents = new Set(compareAgentList());
+  if (checked) compareSelectedAgents.add(name);
+  else compareSelectedAgents.delete(name);
+  renderCompare();
+}
+
+function renderCompare() {
+  const main = document.getElementById('main');
+  const agents = compareData?.agents || {};
+  const allNames = Object.keys(agents);
+  if (!allNames.length) { main.innerHTML = '<div class="empty">No data</div>'; return; }
+
+  // which agents to show as columns
+  const shown = allNames.filter(n => compareSelectedAgents?.has(n));
+  const selectedCount = shown.length;
+  const noneSelected = selectedCount === 0;
+
+  const metricDefs = [
+    { key: 'turn_e2e_ms', label: 'Turn E2E (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: '单轮执行 E2E 时延：用户提交到本轮执行结束（含工具/关联子代理），不含等待用户下轮输入。Session 级取各轮均值。' },
+    { key: 'session_lifespan_ms', label: 'Session Lifespan (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: 'Session 墙钟跨度：首事件到末事件的时间差，含用户空闲等待。不等于任务执行耗时。' },
+    { key: 'llm_attempt_ttft_ms', label: 'TTFT (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: '首 Token 时延（TTFT）：LLM 请求开始到首模型输出的时间。仅含首模型输出，非首文本。' },
+    { key: 'token_input', label: 'Input Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '输入 Token 均值。口径因 Agent 而异：WorkBuddy 含 cache，TeleAgent/DSH 不含 cache。跨 Agent 对比需注意 input_includes_cache。' },
+    { key: 'token_output', label: 'Output Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '输出 Token 均值（completion tokens）。' },
+    { key: 'token_cache_read', label: 'Cache Hit Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '缓存命中 Token 均值（prompt_cache_hit / cache_read）。' },
+    { key: 'token_total', label: 'Total Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '总 Token 均值（input + output + cache_read）。' },
+    { key: 'credits', label: 'Credits (sum)', agg: 'sum', fmt: v => v ? v.toFixed(2) : null, unit: '', desc: 'Credits 消耗总和。仅 WorkBuddy 有 credit 字段；TeleAgent cost 恒为 0；其他无数据。' },
+    { key: 'max_context', label: 'Peak Context (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '峰值上下文使用（各 session 实际达到的最大 token 数）。口径因 Agent 而异。' },
+    { key: 'context_window', label: 'Context Window (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '模型支持的最大上下文窗口。仅 DSH 从 contextPressure.contextWindow 获取；其他 Agent 数据源未存储。' },
+    { key: 'cache_hit_rate', label: 'Cache Hit Rate', agg: 'avg', fmt: v => v != null ? (v*100).toFixed(1)+'%' : null, unit: '', desc: '缓存命中率 = cache_read / (input + cache_read)。input_includes_cache=false 时分子分母口径一致。' },
+    { key: 'llm_call_count', label: 'LLM Calls (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'LLM 调用次数总和。WorkBuddy=含 rawUsage 行数，TeleAgent=step-start 数，DSH=step-start 数。' },
+    { key: 'success_rate', label: 'LLM Success Rate', agg: 'avg', fmt: v => v != null ? (v*100).toFixed(0)+'%' : null, unit: '', desc: 'LLM 成功率 = 成功调用 / (成功 + 错误)。' },
+    { key: 'llm_retry_count', label: 'LLM Retries (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'LLM 重试次数。仅 Mobilework 有精确 retry 事件；其他 nc。' },
+    { key: 'tool_call_count', label: 'Tool Calls (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '工具调用次数总和。' },
+    { key: 'human_confirm_count', label: 'Human Confirms (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '人工确认次数。TeleAgent（perm 行 by 非通配）、Doubao（user content 含确认关键词）、Mobilework（session.permission ask 规则 × tool.called 事件推断）可识别。' },
+    { key: 'step_count', label: 'Steps (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'Step 总数（思考-行动-观察循环数）。' },
+    { key: 'compaction_count', label: 'Compactions (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '上下文压缩触发次数。Mobilework 有 compaction 事件；TeleAgent 有 compaction part；Codex 有 contextCompaction items；其他 nc。' },
+    { key: 'compaction_threshold', label: 'Compact Threshold (avg)', agg: 'avg', fmt: v => v != null ? Math.round(v) : null, unit: 'tok', desc: '上下文压缩阈值（触发自动压缩的 token 上限）。仅 Codex 从 config.toml model_auto_compact_token_limit 提取。' },
+    { key: 'event_count_agent_input', label: 'Agent Inputs (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '用户输入事件数（agent.input）。近似轮次数。' },
+    { key: 'failures_tool', label: 'Tool Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：工具执行错误（exitCode≠0/status≠completed）。' },
+    { key: 'failures_model', label: 'Model Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：模型返回错误（非网关的 LLM 响应异常）。' },
+    { key: 'failures_dependency', label: 'Dependency Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：依赖错误（sidecar/daemon/IPC/ENOENT/DB）。' },
+    { key: 'failures_agent', label: 'Agent Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：Agent 错误（cancelled/streaming/agent 内部异常）。' },
+  ];
+
+  let html = '<div class="section-title">Cross-Agent Comparison <span class="sub">up to 20 sessions per agent · <span style="color:var(--text-muted)">gray = not-captured</span></span></div>';
+
+  // agent selector bar
+  html += '<div class="cmp-agent-bar"><span class="bar-label">显示 Agent：</span>';
+  for (const name of allNames) {
+    const checked = compareSelectedAgents?.has(name);
+    html += `<label class="cmp-agent-chip ${checked ? 'checked' : ''}"><input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleCompareAgent('${name}', this.checked)"> ${name}</label>`;
+  }
+  html += `<a class="bar-action" onclick="compareSelectAll()">全选</a>`;
+  html += `<a class="bar-action" onclick="compareSelectNone()">清空</a>`;
+  html += '</div>';
+
+  if (noneSelected) {
+    html += '<div class="empty">未勾选任何 Agent。请在上方勾选至少一个 Agent。</div>';
+    main.innerHTML = html;
+    return;
+  }
+
+  html += '<table class="cmp"><thead><tr><th>Metric</th>';
+  for (const name of shown) {
+    const a = agents[name];
+    html += `<th><div class="agent-label">${name}</div><div class="session-count">${a.session_count || 0} sessions</div></th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (const def of metricDefs) {
+    html += `<tr><td>${def.label} <span class="metric-help" onclick="showMetricHelp(event, ${JSON.stringify(def.desc).replace(/"/g,'&quot;')})">?</span></td>`;
+    for (const name of shown) {
+      const a = agents[name];
+      if (a.error) { html += '<td class="nc">error</td>'; continue; }
+      const m = a.metrics?.[def.key];
+      if (!m || m.captured === 0) { html += '<td class="nc">—</td>'; }
+      else {
+        const raw = (def.agg === 'sum') ? m.sum : m.avg;
+        const v = def.fmt(raw);
+        const nc = v == null ? ' class="nc"' : '';
+        html += `<td${nc}>${v == null ? '—' : v}</td>`;
+      }
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  main.innerHTML = html;
+}
+
+function compareSelectAll() {
+  compareSelectedAgents = new Set(compareAgentList());
+  renderCompare();
+}
+function compareSelectNone() {
+  compareSelectedAgents = new Set();
+  renderCompare();
+}
+
+document.getElementById('agentFilter').onchange = loadSessions;
+document.getElementById('dateSince').onchange = () => { if (currentTab === 'compare') loadCompare(); else loadSessions(); };
+document.getElementById('dateUntil').onchange = () => { if (currentTab === 'compare') loadCompare(); else loadSessions(); };
+
+function clearDateFilter() {
+  document.getElementById('dateSince').value = '';
+  document.getElementById('dateUntil').value = '';
+  if (currentTab === 'compare') loadCompare(); else loadSessions();
+}
+
+let analyticsCharts = {};
+
+function destroyAnalyticsCharts() {
+  for (const [k, c] of Object.entries(analyticsCharts)) {
+    try { c.destroy(); } catch {}
+    delete analyticsCharts[k];
+  }
+}
+
+const ANALYTICS_COLORS = {
+  input: '#2563eb', output: '#059669', cache_read: '#d97706',
+  total: '#7c3aed', e2e: '#dc2626', ttft: '#7c3aed',
+};
+
+async function loadAnalytics() {
+  destroyAnalyticsCharts();
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="section-title">Analytics Dashboard <span class="sub">visualization of collected metrics</span></div>
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+      <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid var(--border)">
+        <button id="anaSessionMode" onclick="analyticsSetMode('session')" style="padding:6px 16px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:13px">Session Mode</button>
+        <button id="anaCompareMode" onclick="analyticsSetMode('compare')" style="padding:6px 16px;border:none;background:var(--surface);color:var(--text);cursor:pointer;font-size:13px">Compare Mode</button>
+      </div>
+      <div id="anaSessionControls" style="display:flex;gap:8px;align-items:center">
+        <select id="anaAgent" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);font-size:13px"></select>
+        <select id="anaSession" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);font-size:13px;width:300px"></select>
+        <button onclick="loadSessionCharts()" style="padding:4px 12px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:13px">Load</button>
+      </div>
+    </div>
+    <div id="anaContent"><div class="empty">Select a mode to begin</div></div>
+  `;
+  const agentSel = document.getElementById('anaAgent');
+  for (const name of Object.keys(healthData)) {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    agentSel.appendChild(opt);
+  }
+  agentSel.onchange = async () => {
+    const sessSel = document.getElementById('anaSession');
+    sessSel.innerHTML = '';
+    const agent = agentSel.value;
+    if (!agent) return;
+    try {
+      const data = await fetch(`/api/sessions?agent=${agent}`).then(r => r.json());
+      for (const s of (data.items || [])) {
+        const opt = document.createElement('option');
+        opt.value = s.session_id;
+        opt.textContent = `${s.session_id.substring(0, 36)} ${s.started_at ? s.started_at.substring(5, 16) : ''}`;
+        sessSel.appendChild(opt);
+      }
+    } catch {}
+  };
+  analyticsSetMode('session');
+}
+
+function analyticsSetMode(mode) {
+  document.getElementById('anaSessionMode').style.background = mode === 'session' ? 'var(--accent)' : 'var(--surface)';
+  document.getElementById('anaSessionMode').style.color = mode === 'session' ? '#fff' : 'var(--text)';
+  document.getElementById('anaCompareMode').style.background = mode === 'compare' ? 'var(--accent)' : 'var(--surface)';
+  document.getElementById('anaCompareMode').style.color = mode === 'compare' ? '#fff' : 'var(--text)';
+  document.getElementById('anaSessionControls').style.display = mode === 'session' ? 'flex' : 'none';
+  destroyAnalyticsCharts();
+  const content = document.getElementById('anaContent');
+  if (mode === 'compare') {
+    content.innerHTML = '<div class="loading">Loading comparison charts...</div>';
+    loadCompareCharts();
+  } else {
+    content.innerHTML = '<div class="empty">Select an agent and session, then click Load</div>';
+  }
+}
+
+async function loadSessionCharts() {
+  const agent = document.getElementById('anaAgent').value;
+  const sessionId = document.getElementById('anaSession').value;
+  if (!agent || !sessionId) return;
+  const content = document.getElementById('anaContent');
+  content.innerHTML = '<div class="loading">Loading session data...</div>';
+  destroyAnalyticsCharts();
+  try {
+    const [tl, metrics] = await Promise.all([
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/timeline`).then(r => r.json()),
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/metrics`).then(r => r.json()),
+    ]);
+    const points = tl.items || [];
+    const m = {};
+    for (const item of (metrics.items || [])) m[item.metric] = item;
+
+    let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">';
+
+    if (points.length > 0) {
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:1/-1">
+        <div style="font-weight:600;margin-bottom:8px">Token Growth Curve — ${agent} / ${sessionId.substring(0,24)}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Cumulative tokens across ${points.length} LLM calls · drops indicate context compaction</div>
+        <canvas id="chartTokenGrowth" style="max-height:350px"></canvas>
+      </div>`;
+    } else {
+      html += `<div style="grid-column:1/-1" class="empty">No timeline data available for this agent/session</div>`;
+    }
+
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:600;margin-bottom:8px">Session Metrics Summary</div>
+      <canvas id="chartSessionRadar" style="max-height:280px"></canvas>
+    </div>`;
+
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:600;margin-bottom:8px">Token Breakdown</div>
+      <canvas id="chartTokenBreakdown" style="max-height:280px"></canvas>
+    </div>`;
+
+    html += '</div>';
+    content.innerHTML = html;
+
+    if (points.length > 0) {
+      const ctx = document.getElementById('chartTokenGrowth').getContext('2d');
+      analyticsCharts.tokenGrowth = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: points.map(p => `#${p.seq}`),
+          datasets: [
+            { label: 'Cumul. Input', data: points.map(p => p.cumulative_input), borderColor: ANALYTICS_COLORS.input, backgroundColor: ANALYTICS_COLORS.input + '20', fill: true, tension: 0.3, pointRadius: points.length > 50 ? 0 : 3 },
+            { label: 'Cumul. Output', data: points.map(p => p.cumulative_output), borderColor: ANALYTICS_COLORS.output, backgroundColor: ANALYTICS_COLORS.output + '20', fill: true, tension: 0.3, pointRadius: points.length > 50 ? 0 : 3 },
+            { label: 'Cumul. Cache Read', data: points.map(p => p.cumulative_cache_read), borderColor: ANALYTICS_COLORS.cache_read, backgroundColor: ANALYTICS_COLORS.cache_read + '20', fill: false, tension: 0.3, pointRadius: points.length > 50 ? 0 : 3 },
+            { label: 'Cumul. Total', data: points.map(p => p.cumulative_total), borderColor: ANALYTICS_COLORS.total, borderWidth: 2, fill: false, tension: 0.3, pointRadius: points.length > 50 ? 0 : 3 },
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'Tokens' } }, x: { title: { display: true, text: 'LLM Call #' } } },
+        }
+      });
+    }
+
+    const radarLabels = ['TTFT (ms)', 'Turn E2E (ms)', 'Cache Hit', 'Output TPS', 'Success Rate', 'Token Eff.'];
+    const radarValues = [
+      m.llm_attempt_ttft_ms?.value ?? 0,
+      m.turn_e2e_ms?.value ?? 0,
+      m.cache_hit_rate?.value ?? 0,
+      (m.generation_output_tps?.value ?? 0),
+      (m.success_rate?.value ?? 0),
+      m.token_output?.value && m.token_input?.value ? m.token_output.value / m.token_input.value : 0,
+    ];
+    const rctx = document.getElementById('chartSessionRadar').getContext('2d');
+    analyticsCharts.sessionRadar = new Chart(rctx, {
+      type: 'radar',
+      data: { labels: radarLabels, datasets: [{ label: `${agent}`, data: radarValues, backgroundColor: 'rgba(37,99,235,0.2)', borderColor: 'rgba(37,99,235,0.8)', pointBackgroundColor: 'rgba(37,99,235,1)' }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { beginAtZero: true } } }
+    });
+
+    const tokenKeys = ['token_input', 'token_output', 'token_cache_read', 'token_cache_write'];
+    const tokenLabels = ['Input', 'Output', 'Cache Read', 'Cache Write'];
+    const tokenColors = [ANALYTICS_COLORS.input, ANALYTICS_COLORS.output, ANALYTICS_COLORS.cache_read, '#9333ea'];
+    const tbctx = document.getElementById('chartTokenBreakdown').getContext('2d');
+    analyticsCharts.tokenBreakdown = new Chart(tbctx, {
+      type: 'bar',
+      data: { labels: tokenLabels, datasets: [{ label: 'Tokens', data: tokenKeys.map(k => m[k]?.value ?? 0), backgroundColor: tokenColors, borderRadius: 6 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    });
+
+  } catch(e) { content.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+async function loadCompareCharts() {
+  const content = document.getElementById('anaContent');
+  try {
+    const data = await fetch('/api/metrics/compare?limit=20').then(r => r.json());
+    const agents = data.agents || {};
+    const agentNames = Object.keys(agents).filter(n => !agents[n].error);
+    if (!agentNames.length) { content.innerHTML = '<div class="empty">No data</div>'; return; }
+
+    let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">';
+
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:1/-1">
+      <div style="font-weight:600;margin-bottom:8px">Metric Radar — Cross-Agent Comparison</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Normalized 0-1 (higher = better); lower-is-better metrics inverted</div>
+      <canvas id="chartRadar" style="max-height:400px"></canvas>
+    </div>`;
+
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:600;margin-bottom:8px">Token Distribution (avg)</div>
+      <canvas id="chartTokenDist" style="max-height:300px"></canvas>
+    </div>`;
+
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px">
+      <div style="font-weight:600;margin-bottom:8px">Context Usage vs Window</div>
+      <canvas id="chartContext" style="max-height:300px"></canvas>
+    </div>`;
+
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;grid-column:1/-1">
+      <div style="font-weight:600;margin-bottom:8px">Latency P50/P95 (ms)</div>
+      <canvas id="chartLatency" style="max-height:300px"></canvas>
+    </div>`;
+
+    html += '</div>';
+    content.innerHTML = html;
+
+    const radarLabels = ['TTFT', 'Turn E2E', 'Cache Hit', 'Output TPS', 'Success Rate', 'Token Eff.'];
+    const radarColors = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2'];
+
+    const rawValues = {};
+    for (const name of agentNames) {
+      const m = agents[name].metrics || {};
+      rawValues[name] = {
+        ttft: m.llm_attempt_ttft_ms?.avg ?? 0,
+        e2e: m.turn_e2e_ms?.avg ?? 0,
+        cache: m.cache_hit_rate?.avg ?? 0,
+        tps: m.generation_output_tps?.avg ?? 0,
+        success: m.success_rate?.avg ?? 0,
+        eff: (m.token_output?.avg && m.token_input?.avg) ? m.token_output.avg / m.token_input.avg : 0,
+      };
+    }
+    const maxVals = {
+      ttft: Math.max(...agentNames.map(n => rawValues[n].ttft), 1),
+      e2e: Math.max(...agentNames.map(n => rawValues[n].e2e), 1),
+      cache: 1,
+      tps: Math.max(...agentNames.map(n => rawValues[n].tps), 1),
+      success: 1,
+      eff: Math.max(...agentNames.map(n => rawValues[n].eff), 0.001),
+    };
+    const radarDatasets = agentNames.map((name, i) => ({
+      label: name,
+      data: [
+        1 - rawValues[name].ttft / maxVals.ttft,
+        1 - rawValues[name].e2e / maxVals.e2e,
+        rawValues[name].cache,
+        rawValues[name].tps / maxVals.tps,
+        rawValues[name].success,
+        rawValues[name].eff / maxVals.eff,
+      ],
+      backgroundColor: radarColors[i % radarColors.length] + '20',
+      borderColor: radarColors[i % radarColors.length],
+      pointBackgroundColor: radarColors[i % radarColors.length],
+      borderWidth: 2,
+    }));
+    const rctx = document.getElementById('chartRadar').getContext('2d');
+    analyticsCharts.radar = new Chart(rctx, {
+      type: 'radar',
+      data: { labels: radarLabels, datasets: radarDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+        scales: { r: { beginAtZero: true, max: 1, ticks: { stepSize: 0.2 } } },
+      }
+    });
+
+    const tdctx = document.getElementById('chartTokenDist').getContext('2d');
+    analyticsCharts.tokenDist = new Chart(tdctx, {
+      type: 'bar',
+      data: {
+        labels: agentNames,
+        datasets: [
+          { label: 'Input', data: agentNames.map(n => agents[n].metrics.token_input?.avg ?? 0), backgroundColor: ANALYTICS_COLORS.input, stack: 'a' },
+          { label: 'Output', data: agentNames.map(n => agents[n].metrics.token_output?.avg ?? 0), backgroundColor: ANALYTICS_COLORS.output, stack: 'a' },
+          { label: 'Cache Read', data: agentNames.map(n => agents[n].metrics.token_cache_read?.avg ?? 0), backgroundColor: ANALYTICS_COLORS.cache_read, stack: 'a' },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } },
+      }
+    });
+
+    const cctx = document.getElementById('chartContext').getContext('2d');
+    analyticsCharts.context = new Chart(cctx, {
+      type: 'bar',
+      data: {
+        labels: agentNames,
+        datasets: [
+          { label: 'Peak Context (avg)', data: agentNames.map(n => agents[n].metrics.max_context?.avg ?? 0), backgroundColor: '#2563eb80', borderRadius: 6 },
+          { label: 'Context Window (avg)', data: agentNames.map(n => agents[n].metrics.context_window?.avg ?? 0), backgroundColor: '#9333ea40', borderRadius: 6, borderColor: '#9333ea', borderWidth: 2 },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: 'Tokens' } } },
+      }
+    });
+
+    const lctx = document.getElementById('chartLatency').getContext('2d');
+    analyticsCharts.latency = new Chart(lctx, {
+      type: 'bar',
+      data: {
+        labels: agentNames,
+        datasets: [
+          { label: 'E2E P50', data: agentNames.map(n => agents[n].metrics.turn_e2e_ms?.p50 ?? 0), backgroundColor: '#2563eb', borderRadius: 4 },
+          { label: 'E2E P95', data: agentNames.map(n => agents[n].metrics.turn_e2e_ms?.p95 ?? 0), backgroundColor: '#93c5fd', borderRadius: 4 },
+          { label: 'TTFT avg', data: agentNames.map(n => agents[n].metrics.llm_attempt_ttft_ms?.avg ?? 0), backgroundColor: '#d97706', borderRadius: 4 },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+        scales: { y: { beginAtZero: true, title: { display: true, text: 'ms' } } },
+      }
+    });
+
+  } catch(e) { content.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
+}
+
+init();
+</script>
+</body>
+</html>

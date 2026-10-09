@@ -1,0 +1,13 @@
+{
+  "name": "mobilework-llm-proxy",
+  "version": "0.1.0",
+  "description": "MITM HTTP reverse proxy for Mobilework LLM calls. Captures TTFT (request→first-response-byte) and writes collector-attempt JSONL. Observatory reads the JSONL via collector-reader; session_id is matched by time window in the adapter (HTTP requests don't carry session_id).",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

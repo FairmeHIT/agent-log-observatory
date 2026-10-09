@@ -1,0 +1,15 @@
+[
+  {"type":"session.created.1","data":"{\"timestamp\":1790503695000,\"sessionID\":\"ses_fixture_mw_001\"}","seq":0},
+  {"type":"session.next.prompted.1","data":"{\"timestamp\":1790503696000,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_001\"}","seq":1},
+  {"type":"session.next.step.started.1","data":"{\"timestamp\":1790503697000,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_001\",\"agent\":\"mobilework\",\"model\":{\"id\":\"shangtang/deepseek-v4-flash\",\"providerID\":\"----shangtang-deepseek-v4-flash\"}}","seq":2},
+  {"type":"session.next.tool.input.started.1","data":"{\"timestamp\":1790503697500,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_001\"}","seq":3},
+  {"type":"session.next.tool.called.1","data":"{\"timestamp\":1790503698000,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_001\",\"callID\":\"call_fix_001\",\"tool\":\"bash\",\"input\":{\"command\":\"mkdir -p /test\"}}","seq":4},
+  {"type":"session.next.tool.input.ended.1","data":"{\"timestamp\":1790503698500,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_001\"}","seq":5},
+  {"type":"session.next.tool.success.1","data":"{\"timestamp\":1790503699000,\"sessionID\":\"ses_fixture_mw_001\",\"callID\":\"call_fix_001\"}","seq":6},
+  {"type":"session.next.text.started.1","data":"{\"timestamp\":1790503700000,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_002\"}","seq":7},
+  {"type":"session.next.text.ended.1","data":"{\"timestamp\":1790503702000,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_002\"}","seq":8},
+  {"type":"session.next.step.ended.2","data":"{\"timestamp\":1790503703000,\"sessionID\":\"ses_fixture_mw_001\",\"assistantMessageID\":\"msg_fix_001\"}","seq":9},
+  {"type":"session.next.retried.1","data":"{\"timestamp\":1790503704000,\"sessionID\":\"ses_fixture_mw_001\"}","seq":10},
+  {"type":"session.next.compaction.started.1","data":"{\"timestamp\":1790503705000,\"sessionID\":\"ses_fixture_mw_001\"}","seq":11},
+  {"type":"session.next.compaction.ended.1","data":"{\"timestamp\":1790503706000,\"sessionID\":\"ses_fixture_mw_001\"}","seq":12}
+]

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "archivedAt": "2026-10-04",
+  "artifacts": [
+    {
+      "file": "runtime/sqlite3.exe",
+      "version": "3.53.4",
+      "origin": "existing project binary; upstream download provenance not independently verified",
+      "bytes": 4022272,
+      "sha256": "5da2398d4913b893bd1ea578d85403b3a83a06fabf9d2303ca9f63ef0849fc6f"
+    },
+    {
+      "file": "vendor/npm/better-sqlite3-13.0.3.tgz",
+      "version": "13.0.3",
+      "origin": "repacked installed node_modules/better-sqlite3 using npm pack --ignore-scripts",
+      "bytes": 11402122,
+      "sha256": "99cb9f173d6ba008efc750df4d3c60fd16c198361cde711fd122172f3bf8b5f1"
+    },
+    {
+      "file": "vendor/npm/node-addon-api-8.9.2.tgz",
+      "version": "8.9.2",
+      "origin": "repacked installed node_modules/node-addon-api using npm pack --ignore-scripts",
+      "bytes": 62485,
+      "sha256": "7a46755057cb6f93ae4a9ffbbf4341d216fb26a795dc66fb1767d52f544b4fc0"
+    },
+    {
+      "file": "vendor/archives/collectors-before-portability-20261004.tar.gz",
+      "version": "snapshot-2026-10-04",
+      "origin": "project collector sources/installers/schema before portability edits",
+      "bytes": 16287,
+      "sha256": "fef9137d665513a3db6ada668b92c240e63620287a953d5c7d1b5e63e78e6f2c"
+    },
+    {
+      "file": "vendor/licenses/better-sqlite3-LICENSE",
+      "version": "13.0.3",
+      "origin": "installed dependency LICENSE",
+      "bytes": 1078,
+      "sha256": "09856b52897c91ab67e7456ef43067019f31dfd3b87fda72e655736b1ebdee55"
+    },
+    {
+      "file": "vendor/licenses/node-addon-api-LICENSE.md",
+      "version": "8.9.2",
+      "origin": "installed dependency LICENSE.md",
+      "bytes": 1150,
+      "sha256": "89024017b88a9f2b763f79b941a4f2db3b4428edfcacdc0b23866b2da633ad0c"
+    }
+  ]
+}

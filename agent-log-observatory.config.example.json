@@ -1,0 +1,31 @@
+{
+  "port": 8780,
+  "timezone": "Asia/Shanghai",
+  "runtimeDirectory": "runtime",
+  "collectorRoot": "runtime/collectors",
+  "sqliteExecutable": "runtime/sqlite3.exe",
+  "db": {
+    "retentionDays": 30,
+    "syncIntervalMs": 300000
+  },
+  "agents": {
+    "workbuddy": {
+      "installDir": ""
+    },
+    "mobilework": {
+      "installDir": "",
+      "dashboardDataDir": ""
+    },
+    "teleagent": {
+      "installDir": ""
+    },
+    "doubao": {
+      "installDir": ""
+    },
+    "dsh": {
+      "installDir": ""
+    },
+    "codex": {},
+    "opencode": {}
+  }
+}
