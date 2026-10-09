@@ -135,8 +135,9 @@ body {
 .sidebar .item .agent-badge.dsh { background: #fce7f3; color: #9f1239; }
 .sidebar .item .agent-badge.codex { background: #e0e7ff; color: #3730a3; }
 .sidebar .item .agent-badge.opencode { background: #ccfbf1; color: #115e59; }
-.sidebar .item .sid { font-size: 12px; color: var(--text); font-weight: 500; margin-top: 2px; }
+.sidebar .item .sid { font-size: 12px; color: var(--text); font-weight: 500; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .item .time { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.sidebar .item .subtitle { font-size: 11px; color: var(--text-secondary); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Main */
 .main {
@@ -521,16 +522,25 @@ function renderSidebar() {
   for (const s of allSessions) {
     const agent = s.agent_object || '?';
     const sid = (s.session_id || '').substring(0, 24);
-    const time = (s.started_at || '').substring(0, 10);
+    const time = s.started_at ? new Date(s.started_at).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
     const isActive = currentSession && currentSession.agent === agent && currentSession.id === s.session_id;
     const key = agent + '/' + s.session_id;
     const checked = selectedSessions.has(key);
+    // Title: use session title if available, otherwise show truncated session_id
+    const title = s.title ? (s.title.length > 40 ? s.title.substring(0, 40) + '...' : s.title) : sid;
+    // Subtitle: model + turn count for extra context
+    const parts = [];
+    if (s.model) parts.push(s.model);
+    if (s.turn_count) parts.push(s.turn_count + ' turns');
+    if (s.tool_call_count) parts.push(s.tool_call_count + ' tools');
+    const subtitle = parts.length ? parts.join(' · ') : '';
     html += `<div class="item${isActive ? ' active' : ''}" onclick="selectSession('${agent}','${s.session_id}')">
       <input type="checkbox" class="cb" ${checked ? 'checked' : ''} onclick="event.stopPropagation(); toggleSession('${agent}','${s.session_id}', this.checked)" />
       <div class="content">
         <span class="agent-badge ${agent}">${agent}</span>
         <span class="time">${time}</span>
-        <div class="sid">${sid}</div>
+        <div class="sid" title="${s.title ? s.title.replace(/"/g,'&quot;') : s.session_id || ''}">${title}</div>
+        ${subtitle ? `<div class="subtitle">${subtitle}</div>` : ''}
       </div>
     </div>`;
   }
@@ -1570,7 +1580,9 @@ async function loadAnalytics() {
       for (const s of (data.items || [])) {
         const opt = document.createElement('option');
         opt.value = s.session_id;
-        opt.textContent = `${s.session_id.substring(0, 36)} ${s.started_at ? s.started_at.substring(5, 16) : ''}`;
+        const label = s.title ? s.title.substring(0, 50) : s.session_id.substring(0, 36);
+        const time = s.started_at ? new Date(s.started_at).toLocaleDateString('zh-CN') : '';
+        opt.textContent = `${label}${time ? ' (' + time + ')' : ''}`;
         sessSel.appendChild(opt);
       }
     } catch {}
