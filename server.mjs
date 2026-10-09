@@ -1119,6 +1119,212 @@ async function handleApi(req, res, url) {
     return json(res, { items: items || [], source: "live" });
   }
 
+  // ============================================================================
+  // /api/export — 一键导出观测数据（含每 Agent 每 Session 的全部详细日志）
+  // ============================================================================
+  if (p === "/api/export") {
+    const agentFilter = url.searchParams.get("agents");
+    const agentNames = agentFilter
+      ? agentFilter.split(",").filter((n) => adapters[n])
+      : Object.keys(adapters);
+    const timeFilter = parseTimeFilter(url);
+    const since = timeFilter.since || 0;
+    const until = timeFilter.until || Date.now();
+
+    const now = Date.now();
+    const stamp = beijingIso().replace(/[-:T]/g, "").slice(0, 15);
+    const filename = `observatory-export-${stamp}.json`;
+
+    const exportData = { export_metadata: {}, summary: {}, agents: {} };
+
+    // --- export_metadata ---
+    const sessionsByAgent = {};
+    let totalSessions = 0;
+    let availableAgents = 0;
+
+    // --- summary: reuse aggregateForCompare logic ---
+    const compareData = {};
+
+    // --- per-agent session detail ---
+    const useDB = getDBStats().session_count > 0;
+
+    for (const name of agentNames) {
+      const adapter = adapters[name];
+
+      // agent_info via discover()
+      let agentInfo;
+      try {
+        const d = await adapter.discover();
+        agentInfo = {
+          available: d.available,
+          adapter_version: d.adapter_version,
+          agent_version: d.agent_version,
+          sources: d.sources,
+          missing_reasons: d.missing_reasons || [],
+          modes: d.modes || [],
+        };
+      } catch (e) {
+        agentInfo = { available: false, adapter_version: null, error: e.message };
+      }
+      if (agentInfo.available) availableAgents++;
+
+      // get sessions
+      let sessions = [];
+      try {
+        if (useDB) {
+          sessions = getDBSessionItems({ agent: name, limit: 500, since, until });
+        }
+        if (sessions.length === 0) {
+          const result = await adapter.extractSessions({ limit: 500, ...timeFilter });
+          sessions = result.items || [];
+        }
+      } catch { sessions = []; }
+
+      sessionsByAgent[name] = sessions.length;
+      totalSessions += sessions.length;
+
+      // collect sessionMetrics for compare summary
+      const sessionMetricsForCompare = [];
+
+      // build per-session detail
+      const sessionDetails = [];
+      for (const s of sessions) {
+        const sid = s.session_id || s.id;
+        if (!sid) continue;
+
+        // metrics
+        let metrics = [];
+        try {
+          if (useDB) {
+            const fromDB = getDBSessionMetrics(name, sid);
+            if (fromDB && fromDB.length > 0) metrics = fromDB;
+          }
+          if (metrics.length === 0) metrics = await adapter.extractMetrics(sid);
+        } catch {}
+
+        // events
+        let events = [];
+        try {
+          if (useDB) {
+            const fromDB = getDBEvents(name, sid);
+            if (fromDB && fromDB.length > 0) events = fromDB;
+          }
+          if (events.length === 0) events = (await adapter.extractEvents?.(sid)) || [];
+        } catch {}
+
+        // usage
+        let usage = [];
+        try {
+          if (useDB) {
+            const fromDB = getDBUsage(name, sid);
+            if (fromDB && fromDB.length > 0) usage = fromDB;
+          }
+          if (usage.length === 0) usage = (await adapter.extractUsage?.(sid)) || [];
+        } catch {}
+
+        // calls (always live, no DB cache)
+        let calls = { llm_calls: [], tool_calls: [], trace_duration_ms: null };
+        try {
+          if (adapter.extractCalls) calls = await adapter.extractCalls(sid);
+        } catch {}
+
+        // failures (always live, no DB cache)
+        let failures = {
+          diagnostics: [],
+          summary: { gateway: 0, tool: 0, model: 0, dependency: 0, agent: 0 },
+          source_available: true,
+        };
+        try {
+          if (adapter.extractFailures) {
+            const f = await adapter.extractFailures(sid);
+            const fsum = f.summary || {};
+            const failuresNc = f.source_available === false;
+            failures = {
+              diagnostics: f.diagnostics || [],
+              summary: {
+                gateway: failuresNc ? null : (fsum.gateway || 0),
+                tool: failuresNc ? null : (fsum.tool || 0),
+                model: failuresNc ? null : (fsum.model || 0),
+                dependency: failuresNc ? null : (fsum.dependency || 0),
+                agent: failuresNc ? null : (fsum.agent || 0),
+              },
+              source_available: f.source_available !== false,
+            };
+          }
+        } catch {}
+
+        // timeline
+        let timeline = [];
+        try {
+          if (useDB) {
+            const fromDB = getDBTimeline(name, sid);
+            if (fromDB && fromDB.length > 0) timeline = fromDB;
+          }
+          if (timeline.length === 0) timeline = (await adapter.extractTimeline?.(sid)) || [];
+        } catch {}
+
+        // merge failures into metrics for compare summary
+        const metricMap = {};
+        for (const m of metrics) {
+          if (!metricMap[m.metric] || m.state === "captured") {
+            metricMap[m.metric] = { value: m.value, state: m.state, unit: m.unit };
+          }
+        }
+        const fsum = failures.summary;
+        const failuresNc = !failures.source_available;
+        for (const cat of ["gateway", "tool", "model", "dependency", "agent"]) {
+          metricMap["failures_" + cat] = failuresNc
+            ? { value: null, state: "not-captured", missing_reason: "source_unavailable" }
+            : { value: fsum[cat] || 0, state: "captured" };
+        }
+        sessionMetricsForCompare.push({ session_id: sid, metrics: metricMap });
+
+        sessionDetails.push({
+          session: s,
+          metrics,
+          events,
+          usage,
+          calls,
+          failures,
+          timeline,
+        });
+      }
+
+      exportData.agents[name] = { agent_info: agentInfo, sessions: sessionDetails };
+      compareData[name] = aggregateForCompare(sessionMetricsForCompare);
+    }
+
+    exportData.export_metadata = {
+      exported_at: beijingIso(),
+      exported_at_epoch_ms: now,
+      tool_version: config.appVersion,
+      filter: {
+        agents: agentFilter || "all",
+        since: timeFilter.since ? new Date(timeFilter.since).toISOString() : null,
+        until: timeFilter.until ? new Date(timeFilter.until).toISOString() : null,
+      },
+      statistics: {
+        total_agents: agentNames.length,
+        available_agents: availableAgents,
+        total_sessions: totalSessions,
+        sessions_by_agent: sessionsByAgent,
+      },
+    };
+
+    exportData.summary = {
+      generated_at: beijingIso(),
+      agents: compareData,
+    };
+
+    const body = JSON.stringify(redact(exportData), null, 2);
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    });
+    res.end(body);
+    return;
+  }
+
   return jsonFiltered(res, { error: "not_found", path: p }, 404);
 }
 

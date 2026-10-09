@@ -446,6 +446,7 @@ table.cmp tr:hover td { background: #f8fafc; }
   <input type="datetime-local" id="dateUntil" title="结束时间（精确到分钟）" style="padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;outline:none;color-scheme:dark" />
   <button onclick="clearDateFilter()" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer">Clear</button>
   <button onclick="refreshCurrentTab()" id="refreshBtn" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px">&#x21bb; Refresh</button>
+  <button onclick="exportData()" id="exportBtn" style="padding:4px 12px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px" title="导出全部观测数据为 JSON">&#x2B07; Export</button>
   <span id="envBadge" onclick="switchTab('envcheck')" style="cursor:pointer;font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);display:none" title="环境检查概览"></span>
   <span class="ver" id="ver"></span>
 </div>
@@ -755,6 +756,44 @@ function switchTab(tab) {
   } else {
     sidebar.style.display = '';
     main.innerHTML = '<div class="empty">Select a session to view details</div>';
+  }
+}
+
+// ---- Export ----
+async function exportData() {
+  const btn = document.getElementById('exportBtn');
+  const oldHtml = btn.innerHTML;
+  btn.innerHTML = '\u2B07 Exporting...';
+  btn.style.opacity = '0.6';
+  btn.disabled = true;
+  try {
+    const params = new URLSearchParams();
+    const agent = document.getElementById('agentFilter').value;
+    const since = document.getElementById('dateSince').value;
+    const until = document.getElementById('dateUntil').value;
+    if (agent) params.set('agents', agent);
+    if (since) params.set('since', since);
+    if (until) params.set('until', until);
+    const resp = await fetch('/api/export?' + params.toString());
+    if (!resp.ok) throw new Error('Export failed: ' + resp.status);
+    const blob = await resp.blob();
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const m = disposition.match(/filename="?([^"]+)"?/);
+    const filename = m ? m[1] : 'observatory-export.json';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+  } finally {
+    btn.innerHTML = oldHtml;
+    btn.style.opacity = '1';
+    btn.disabled = false;
   }
 }
 
