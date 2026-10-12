@@ -769,7 +769,9 @@ export class WorkBuddyAdapter extends BaseAdapter {
     return { first, last };
   }
 
-  // 扫描 transcript，返回首条 assistant message 的 timestamp（epoch ms）
+  // 扫描 transcript，返回首条模型输出（reasoning 或 assistant message）的 timestamp（epoch ms）。
+  // 优先取 reasoning 行的时间戳——它是模型开始生成的时刻（响应开始）。
+  // 只有当没有 reasoning 行时才回退到 assistant message 行（可能是响应结束时间）。
   async _getFirstAssistantTimestamp(sessionId) {
     const cfg = resolveAgentConfig("workbuddy");
     const projectsDir = path.join(cfg.dataDir, "projects");
@@ -777,6 +779,18 @@ export class WorkBuddyAdapter extends BaseAdapter {
       const jsonlPath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
       try { await fs.access(jsonlPath); } catch { continue; }
       const content = await fs.readFile(jsonlPath, "utf8");
+      // Pass 1: 找首条 reasoning 行（模型开始生成 = 响应开始）
+      for (const line of content.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj.type === "reasoning" && obj.timestamp != null) {
+            return obj.timestamp;
+          }
+        } catch {}
+      }
+      // Pass 2: 无 reasoning 行，回退到首条 assistant message（可能是响应结束时间）
       for (const line of content.split("\n")) {
         const t = line.trim();
         if (!t) continue;
