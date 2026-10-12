@@ -558,7 +558,7 @@ async function checkProcess(name) {
     );
     const count = Number(stripBom(run.stdout).trim());
     if (count > 0) return [{ name: "process", status: "ok", detail: `运行中 (${count} 个进程)` }];
-    return [{ name: "process", status: "info", detail: "未运行", fix: name === "mobilework" ? "运行 启动Mobilework.cmd" : `启动 ${name} 客户端` }];
+    return [{ name: "process", status: "info", detail: "未运行", fix: name === "mobilework" ? "运行 start-mobilework.cmd" : `启动 ${name} 客户端` }];
   } catch {
     return [];
   }
@@ -628,7 +628,7 @@ async function checkMobileworkEnv(cfg) {
     if (ok) {
       checks.push({ name: "llm_proxy", status: "ok", detail: "MITM 代理运行中 (port 8890)" });
     } else {
-      checks.push({ name: "llm_proxy", status: "info", detail: "代理未运行 (port 8890)", fix: "运行 启动Mobilework.cmd" });
+      checks.push({ name: "llm_proxy", status: "info", detail: "代理未运行 (port 8890)", fix: "运行 start-mobilework.cmd" });
     }
   } catch {}
   // collector 数据

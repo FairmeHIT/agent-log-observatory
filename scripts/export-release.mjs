@@ -7,7 +7,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const packageInfo=JSON.parse(fs.readFileSync(path.join(root,"package.json")));
 const out=path.join(root,"releases","agent-log-observatory-"+packageInfo.version);
 if(fs.existsSync(out)) throw new Error("Release directory exists; preserve/archive it before exporting again: "+out);
-const files=["AGENTS.md","README.md","SPEC.md","LICENSE","需求文档.md","版本迭代说明.md","THIRD_PARTY_NOTICES.md",".gitignore","package.json","package-lock.json","agent-log-observatory.config.example.json","server.mjs","index.html","启动.cmd","停止.cmd","启动Mobilework.cmd","runtime/sqlite3.exe","runtime/README.md","releases/README.md","docs/deployment.md","docs/dependency-inventory.md","docs/collector-design.md"];
+const files=["AGENTS.md","README.md","README.zh-CN.md","SPEC.md","LICENSE","CHANGELOG.md","THIRD_PARTY_NOTICES.md",".gitignore","package.json","package-lock.json","agent-log-observatory.config.example.json","server.mjs","index.html","start.cmd","stop.cmd","start-mobilework.cmd","runtime/sqlite3.exe","runtime/README.md","releases/README.md","docs/deployment.md","docs/dependency-inventory.md","docs/collector-design.md"];
 const denied=new Set(["collectors/mobilework-llm-proxy/proxy-config.json"]);
 function collect(dir) {
   for(const entry of fs.readdirSync(path.join(root,dir),{withFileTypes:true})) {

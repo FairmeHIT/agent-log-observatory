@@ -89,7 +89,7 @@ node server.mjs
 
 Open `http://127.0.0.1:8780/` in your browser. Press `Ctrl+C` to stop.
 
-Alternatively, double-click `启动.cmd` to start the dashboard + Mobilework proxy + Doubao CDP collector in the background. Use `停止.cmd` to stop all project processes (never kills agent clients).
+Alternatively, double-click `start.cmd` to start the dashboard + Mobilework proxy + Doubao CDP collector in the background. Use `stop.cmd` to stop all project processes (never kills agent clients).
 
 ## Optional Collectors
 

@@ -21,7 +21,7 @@
 
    不要填写 `<username>` 之类未替换占位符。`~/` 展开当前用户；`${LOCALAPPDATA}` / `${APPDATA}` 展开环境变量；相对路径从项目根解析。缺省路径见 `lib/config.mjs`。
 5. `npm run doctor`，所有 `[FAIL]` 修复后再启动。`[OPTIONAL]` Agent 不存在不是安装失败。
-6. `node server.mjs`，访问 `http://127.0.0.1:8780/`（自定义 port 后相应修改 URL）。或用 `启动.cmd` 隐藏后台一键启动 Dashboard 与采集器（豆包未开调试端口时自动跳过）、`停止.cmd` 全部停止。
+6. `node server.mjs`，访问 `http://127.0.0.1:8780/`（自定义 port 后相应修改 URL）。或用 `start.cmd` 隐藏后台一键启动 Dashboard 与采集器（豆包未开调试端口时自动跳过）、`stop.cmd` 全部停止。
 7. 检查 `/api/health` 与 `/api/sessions`。先在至少一个 Agent 正常完成会话，刷新 Dashboard；空目录不能产生真实数据。
 
 **同版本依赖已随项目归档，无需联网安装 npm 包**。Node 自身/Agent 客户端由用户准备；客户端正常使用可能需要网络与账号，不属于观察台离线保证。当前分发/测试范围仅 Windows x64；其他系统须准备对应 SQLite CLI 并验证适配器。
@@ -64,9 +64,9 @@
 
 1. 在本地配置填写 `agents.mobilework.installDir`，目录下应有 `MobileWork.exe`；非标准文件位置可显式设置 `$env:AGENT_LOG_MOBILEWORK_EXE`。
 2. 自行关闭已打开的 Mobilework，避免单实例客户端沿用旧进程环境。
-3. 执行 `启动Mobilework.cmd`。只启动本项目 HTTP 代理（8890）、Dashboard（配置 port）和客户端；只给新启动的客户端设 `HTTP_PROXY`/`NO_PROXY`，不改系统环境变量。
+3. 执行 `start-mobilework.cmd`。只启动本项目 HTTP 代理（8890）、Dashboard（配置 port）和客户端；只给新启动的客户端设 `HTTP_PROXY`/`NO_PROXY`，不改系统环境变量。
 4. 在 Mobilework 正常发消息，检查 `runtime/collectors/mobilework/attempts-YYYYMMDD.jsonl`，再查看 Dashboard。
-5. 自行关闭 Mobilework，再运行 `停止.cmd`；之后直接打开客户端就不会继承本次代理环境。脚本不会强制终止 Agent 客户端。
+5. 自行关闭 Mobilework，再运行 `stop.cmd`；之后直接打开客户端就不会继承本次代理环境。脚本不会强制终止 Agent 客户端。
 
 ### B. 可选：反向代理（会修改外部配置）
 
@@ -92,9 +92,9 @@
 
    不将调试口暴露到局域网/公网；不要在对外发布的截图中公开会话 URL。能否开启 CDP 取决于客户端版本。
 3. `Invoke-RestMethod http://127.0.0.1:9223/json/version` 确认本地调试口可访问。
-4. 运行 `启动.cmd`（检测到 9223 端口会自动附着采集器），或前台运行 `node collectors/doubao-cdp-collector/index.mjs`。非默认端口先设置 `$env:DOUBAO_CDP_PORT`。
+4. 运行 `start.cmd`（检测到 9223 端口会自动附着采集器），或前台运行 `node collectors/doubao-cdp-collector/index.mjs`。非默认端口先设置 `$env:DOUBAO_CDP_PORT`。
 5. 在豆包**正常发消息**，确认 `runtime/collectors/doubao/attempts-YYYYMMDD.jsonl`，诊断/锁文件在 `runtime/`。然后查看 Dashboard。
-6. `停止.cmd` 即可停掉采集器；退出 Doubao 并不带调试参数重新启动，关闭 CDP。没有要卸载的客户端插件。
+6. `stop.cmd` 即可停掉采集器；退出 Doubao 并不带调试参数重新启动，关闭 CDP。没有要卸载的客户端插件。
 
 当前 TTFT 在未收到首 chunk 事件时回退到 `responseReceived`（derived）；Token/model 字段缺失保持 nc。不能从 `fetch_token` 推断 Token 消耗。
 

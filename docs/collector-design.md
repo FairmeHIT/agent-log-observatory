@@ -332,8 +332,8 @@ opencode engine → http://127.0.0.1:8890/v1 (代理) → http://47.112.174.22:3
 REM 1. Doubao 以调试端口启动
 "D:\02-software-install\doubao-zijie\Doubao\app\Doubao.exe" --remote-debugging-port=9223
 
-REM 2. 启动采集器（启动.cmd 检测到 CDP 端口时也会自动附着）
-启动.cmd
+REM 2. 启动采集器（start.cmd 检测到 CDP 端口时也会自动附着）
+start.cmd
 ```
 
 **实测结果**（conversation `38445522909057538`）：

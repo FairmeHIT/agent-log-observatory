@@ -99,7 +99,7 @@ test('dependencies resolve to vendored archives, not a registry',()=>{
   const manifest=JSON.parse(fs.readFileSync(path.join(root,'vendor/manifest.json'))); assert.equal(manifest.artifacts.length,6);
 });
 test('launchers no longer terminate clients or unrelated processes by name/port',()=>{
-  for(const name of ['启动.cmd','停止.cmd','启动Mobilework.cmd']){
+  for(const name of ['start.cmd','stop.cmd','start-mobilework.cmd']){
     const text=fs.readFileSync(path.join(root,name),'utf8'); assert.ok(!/taskkill|wmic|D:\\/i.test(text),name); assert.match(text,/services\.ps1/);
   }
   const services=fs.readFileSync(path.join(root,'scripts/services.ps1'),'utf8'); assert.match(services,/-WindowStyle Hidden/); assert.match(services,/Get-OwnedProcess/);

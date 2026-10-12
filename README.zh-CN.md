@@ -89,7 +89,7 @@ node server.mjs
 
 浏览器访问 `http://127.0.0.1:8780/`，`Ctrl+C` 停止。
 
-也可双击 `启动.cmd`：一键在后台启动 Dashboard + Mobilework 代理 + 豆包 CDP 采集器；`停止.cmd` 停止全部本项目进程（不杀 Agent 客户端）。
+也可双击 `start.cmd`：一键在后台启动 Dashboard + Mobilework 代理 + 豆包 CDP 采集器；`stop.cmd` 停止全部本项目进程（不杀 Agent 客户端）。
 
 ## 可选采集器
 

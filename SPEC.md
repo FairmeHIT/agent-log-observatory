@@ -226,15 +226,15 @@ state=captured/partial/not-captured/not-applicable；estimated 是证据等级�
 
 ```
 agent-platform-projects/agent-log-observatory/
-├── README.md                         # 项目说明和快速启动
+├── README.md                         # 项目说明和快速启动（English 默认）
+├── README.zh-CN.md                   # 中文文档
 ├── SPEC.md                           # 本文件：需求分析与工程规格
-├── 需求文档.md                        # 版本化需求记录（沿用 mobilework-trace-dashboard 惯例）
-├── 版本迭代说明.md                     # 版本变更记录
+├── CHANGELOG.md                      # 版本变更记录
 ├── server.mjs                        # Node.js HTTP 服务（主入口）
 ├── index.html                        # 单页 Dashboard 前端
-├── 启动.cmd                            # Windows 一键启动（Dashboard + 采集器）
-├── 停止.cmd                            # Windows 一键停止（本项目登记进程）
-├── 启动Mobilework.cmd                   # Mobilework 栈（代理 + Dashboard + 客户端）
+├── start.cmd                          # Windows 一键启动（Dashboard + 采集器）
+├── stop.cmd                           # Windows 一键停止（本项目登记进程）
+├── start-mobilework.cmd               # Mobilework 栈（代理 + Dashboard + 客户端）
 ├── runtime/
 │   └── sqlite3.exe                   # 便携 SQLite（复用 mobilework-trace-dashboard）
 ├── adapters/                         # Agent 数据源适配器（核心扩展点）
@@ -468,7 +468,7 @@ terminal_coverage=(known-ok+known-error)/全部实际attempts，用于解释成�
 
 旧项目既有 Mobilework 原生深度观测，也已有多对象 EAQE Bundle 阅读能力；不能描述为“只有单 Agent SQLite Dashboard”。本项目继承其可验证的观察能力，统一核心契约，将对象特性放进 Adapter；旧项目继续独立可用，不直接改造其发布包。
 
-迁移依据：[server.mjs](../mobilework-trace-dashboard/server.mjs)、[index.html](../mobilework-trace-dashboard/index.html)、[需求文档](../mobilework-trace-dashboard/需求文档.md)、[版本迭代说明](../mobilework-trace-dashboard/版本迭代说明.md)。以下为迁移要求，不代表全部已实现。
+迁移依据：[server.mjs](../mobilework-trace-dashboard/server.mjs)、[index.html](../mobilework-trace-dashboard/index.html)。以下为迁移要求，不代表全部已实现。
 
 | 能力 | 迁移要求 | 验收分类 |
 |---|---|---|
