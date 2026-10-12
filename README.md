@@ -87,3 +87,13 @@ API 检查：`GET /api/health`、`GET /api/sessions`、`GET /api/metrics/compare
 - [工具/插件归档清单与外部依赖边界](docs/dependency-inventory.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
 - [协作契约](AGENTS.md) · [指标与架构规格](SPEC.md) · [适配器指南](adapters/README.md)
+
+
+## Windows 后台查询窗口（2026-10-11）
+
+SQLite 只读查询通过 `lib/sqlite-query.mjs` 调用本项目 SQLite CLI。后台服务以 detached 模式运行时，
+`stdio: "ignore"` 只关闭输出流，不能代替 `windowsHide: true`。JSON 查询与 list 回退统一隐藏进程窗口，
+保留 `-readonly`、临时文件读取和原有结果/缺失语义。修改该共享模块后，已启动的观测服务需要重新加载。
+
+回归：`node --test tests/test-sqlite-background-process.mjs`（JSON/list 两条路径）与 `npm test`。
+原生验证使用独立临时数据库和 detached Node 父进程，不读写 Agent 源数据、不提交 Agent 任务。
