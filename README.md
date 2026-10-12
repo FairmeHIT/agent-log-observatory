@@ -1,8 +1,5 @@
 # Agent Log Observatory
 
-> Copyright 2026 lihuafu (https://github.com/FairmeHIT)  
-> Licensed under the [Apache License, Version 2.0](LICENSE).
-
 跨 Agent 的本地日志观测 Dashboard：统一展示时延、Token、LLM/工具调用、人工确认和失败归因。支持 WorkBuddy、Mobilework、TeleAgent、Doubao、DSH、Codex、opencode。
 
 **定位：可独立复制/clone 的项目，不依赖本工作区的其他子项目。** 没有安装的 Agent 显示不可用；源数据没有的指标显示 `not-captured`，不会伪装为 0。
@@ -97,3 +94,8 @@ SQLite 只读查询通过 `lib/sqlite-query.mjs` 调用本项目 SQLite CLI。�
 
 回归：`node --test tests/test-sqlite-background-process.mjs`（JSON/list 两条路径）与 `npm test`。
 原生验证使用独立临时数据库和 detached Node 父进程，不读写 Agent 源数据、不提交 Agent 任务。
+
+---
+
+> Copyright 2026 lihuafu (https://github.com/FairmeHIT)  
+> Licensed under the [Apache License, Version 2.0](LICENSE).
