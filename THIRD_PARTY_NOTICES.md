@@ -1,6 +1,6 @@
 # 第三方声明与发布前检查
 
-本项目基于 [Apache License 2.0](LICENSE) 开源，Copyright 2026 lihuafu (https://github.com/FairmeHIT)。
+本项目基于 [Apache License 2.0](LICENSE) 开源，Copyright 2026 FairmeHIT(https://github.com/FairmeHIT)。
 
 本文件登记已归档依赖的第三方组件授权信息。
 

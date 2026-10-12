@@ -97,5 +97,5 @@ SQLite 只读查询通过 `lib/sqlite-query.mjs` 调用本项目 SQLite CLI。�
 
 ---
 
-> Copyright 2026 lihuafu (https://github.com/FairmeHIT)  
+> Copyright 2026 FairmeHIT(https://github.com/FairmeHIT)  
 > Licensed under the [Apache License, Version 2.0](LICENSE).
