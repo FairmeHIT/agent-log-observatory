@@ -1,6 +1,6 @@
 {
   "name": "agent-log-observatory",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "跨 Agent 的本地日志观测与统计分析工具。将散落在各 Agent 客户端中的本地日志进行标准化处理、聚合和统一可视化。",
   "author": "lihuafu (https://github.com/FairmeHIT)",
   "license": "Apache-2.0",
