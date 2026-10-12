@@ -4,7 +4,7 @@ import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/n
 import { makeFieldEvidence, makeDataCompleteness, makeMetricResult, METRIC_DEFINITION_VERSION } from "../lib/evidence.mjs";
 import { parseElectronLogLine } from "../lib/log-parser.mjs";
 import { redact } from "../lib/redactor.mjs";
-import { computeSuccessRate, computeRetryRate, aggregateTokens, computeCacheHitRate, computeOutputTps, computeSessionTurnE2eAvg, computeSessionLifespanMs } from "../lib/metrics.mjs";
+import { computeSuccessRate, computeRetryRate, aggregateTokens, computeCacheHitRate, computeOutputTps, computeSessionTurnE2eAvg, computeSessionLifespanMs, computeSessionFirstResponseMs, makeErrorCountMetrics } from "../lib/metrics.mjs";
 import { computeTtftFromAttempts } from "../lib/collector-reader.mjs";
 import path from "node:path";
 import os from "node:os";
@@ -65,15 +65,24 @@ export class WorkBuddyAdapter extends BaseAdapter {
   }
 
   async extractSessions(options = {}) {
-    const cfg = resolveAgentConfig("workbuddy");
-    const sessionsDir = path.join(cfg.dataDir, "sessions");
+    const sessionsDir = path.join(this._wbDataDir(), "sessions");
     const items = [];
+    let skippedPrewarm = 0;
+
+    // 预先从 transcript 的 ai-title 行构建 sessionId → title 映射
+    const titleMap = await this._buildTitleMap();
 
     try {
       const files = await fs.readdir(sessionsDir);
       for (const file of files.filter((f) => f.endsWith(".json"))) {
         try {
           const raw = JSON.parse(await fs.readFile(path.join(sessionsDir, file), "utf8"));
+          const sid = raw.sessionId || "";
+          const kind = raw.kind || "";
+          // 过滤预热池 session：sessionId 以 prewarm-wb-pool 开头，或 kind 非 interactive
+          // 这些是 WorkBuddy 进程池预热会话，无真实用户任务，纳入会污染指标
+          if (sid.startsWith("prewarm-wb-pool")) { skippedPrewarm++; continue; }
+          if (kind && kind !== "interactive") { skippedPrewarm++; continue; }
           const startedMs = raw.startedAt || null;
           if (options.since && startedMs && startedMs < options.since) continue;
           if (options.until && startedMs && startedMs > options.until) continue;
@@ -81,6 +90,7 @@ export class WorkBuddyAdapter extends BaseAdapter {
             agent_object: "workbuddy",
             session_id: raw.sessionId,
             project_dir: raw.cwd,
+            title: titleMap.get(raw.sessionId) || null,
             started_at: startedMs ? beijingIso(startedMs) : null,
             model: null,
             agent_name: "workbuddy",
@@ -91,7 +101,12 @@ export class WorkBuddyAdapter extends BaseAdapter {
       }
     } catch {}
 
-    return { items, nextCursor: null, asOf: Date.now(), coverage: { total: items.length } };
+    return {
+      items,
+      nextCursor: null,
+      asOf: Date.now(),
+      coverage: { total: items.length, skipped_prewarm: skippedPrewarm },
+    };
   }
 
   async extractEvents(sessionId, options = {}) {
@@ -117,6 +132,49 @@ export class WorkBuddyAdapter extends BaseAdapter {
       break;
     }
     return events;
+  }
+
+  /**
+   * 实时从 transcript 提取对话摘要（不落盘到 observatory.db）。
+   * 返回第一条 user message 和最后一条 assistant response 的内容摘要。
+   * 符合 AGENTS.md "不落盘 Prompt/响应正文" 约束：只实时读取，不存储。
+   */
+  async extractExcerpt(sessionId, maxChars = 200) {
+    const projectsDir = path.join(this._wbDataDir(), "projects");
+    let firstUserText = null;
+    let lastAssistantText = null;
+    let lastAssistantModel = null;
+    for await (const dir of readDirEntries(projectsDir)) {
+      const jsonlPath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+      try { await fs.access(jsonlPath); } catch { continue; }
+      const content = await fs.readFile(jsonlPath, "utf8");
+      for (const line of content.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj.type === "message") {
+            const text = extractMessageText(obj);
+            if (!text) continue;
+            if (obj.role === "user" && firstUserText === null) {
+              firstUserText = stripInjectedContext(text, maxChars);
+            }
+            if (obj.role === "assistant") {
+              lastAssistantText = text.slice(0, maxChars);
+              lastAssistantModel = obj.providerData?.model || null;
+            }
+          }
+        } catch {}
+      }
+      break;
+    }
+    return {
+      session_id: sessionId,
+      agent_object: "workbuddy",
+      first_user_message: firstUserText,
+      last_assistant_message: lastAssistantText,
+      last_assistant_model: lastAssistantModel,
+    };
   }
 
   async extractUsage(sessionId, options = {}) {
@@ -361,13 +419,19 @@ export class WorkBuddyAdapter extends BaseAdapter {
       lifespan.missing_reason = "source_unavailable";
     }
 
+    // session_first_response_ms: 首条 assistant message timestamp − transcript 首条 timestamp
+    const firstResponseEpoch = await this._getFirstAssistantTimestamp(sessionId);
+
     const generationMs = llmCalls
       .filter((c) => c.requested_at && c.generation_ended_at)
       .reduce((s, c) => s + (c.generation_ended_at - c.requested_at), 0);
 
+    const failures = await this.extractFailures(sessionId);
+
     return [
       turnE2e,
       lifespan,
+      computeSessionFirstResponseMs(transcriptRange.first ?? null, firstResponseEpoch, sessionId),
       makeMetricResult("token_input", tokens.input || null, {
         unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
@@ -425,6 +489,7 @@ export class WorkBuddyAdapter extends BaseAdapter {
         unit: "tokens", scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
       }),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
     ];
   }
 
@@ -556,6 +621,44 @@ export class WorkBuddyAdapter extends BaseAdapter {
       || path.join(os.homedir(), ".workbuddy");
   }
 
+  /**
+   * 从 transcript (projects/<slug>/<sessionId>.jsonl) 的 ai-title 行构建
+   * sessionId → aiTitle 映射。ai-title 行通常在前几行，只读取文件前 16KB 即可。
+   */
+  async _buildTitleMap() {
+    const projectsDir = path.join(this._wbDataDir(), "projects");
+    const titleMap = new Map();
+    for await (const dir of readDirEntries(projectsDir)) {
+      const subDir = path.join(projectsDir, dir);
+      let entries;
+      try { entries = await fs.readdir(subDir); } catch { continue; }
+      for (const f of entries) {
+        if (!f.endsWith(".jsonl")) continue;
+        const sid = f.replace(/\.jsonl$/, "");
+        if (titleMap.has(sid)) continue;
+        try {
+          const handle = await fs.open(path.join(subDir, f), "r");
+          const buf = Buffer.alloc(16384);
+          const { bytesRead } = await handle.read(buf, 0, 16384, 0);
+          await handle.close();
+          const text = buf.toString("utf8", 0, bytesRead);
+          for (const line of text.split("\n")) {
+            const t = line.trim();
+            if (!t) continue;
+            try {
+              const o = JSON.parse(t);
+              if (o.type === "ai-title" && o.aiTitle) {
+                titleMap.set(sid, o.aiTitle);
+                break;
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+    }
+    return titleMap;
+  }
+
   async _findTraceFile(sessionId) {
     const tracesDir = path.join(this._wbDataDir(), "traces");
     try {
@@ -664,6 +767,29 @@ export class WorkBuddyAdapter extends BaseAdapter {
       break;
     }
     return { first, last };
+  }
+
+  // 扫描 transcript，返回首条 assistant message 的 timestamp（epoch ms）
+  async _getFirstAssistantTimestamp(sessionId) {
+    const cfg = resolveAgentConfig("workbuddy");
+    const projectsDir = path.join(cfg.dataDir, "projects");
+    for await (const dir of readDirEntries(projectsDir)) {
+      const jsonlPath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+      try { await fs.access(jsonlPath); } catch { continue; }
+      const content = await fs.readFile(jsonlPath, "utf8");
+      for (const line of content.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (obj.type === "message" && obj.role === "assistant" && obj.timestamp != null) {
+            return obj.timestamp;
+          }
+        } catch {}
+      }
+      break;
+    }
+    return null;
   }
 
   async extractFailures(sessionId, options = {}) {
@@ -776,6 +902,43 @@ function beijingIso(epochMs) {
   }).formatToParts(instant).reduce((acc, p) => ((acc[p.type] = p.value), acc), {});
   const ms = String(instant.getMilliseconds()).padStart(3, "0");
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${ms}+08:00`;
+}
+
+function extractMessageText(obj) {
+  if (!obj.content || !Array.isArray(obj.content)) return null;
+  const parts = [];
+  for (const c of obj.content) {
+    if (typeof c.text === "string") parts.push(c.text);
+    else if (typeof c === "string") parts.push(c);
+  }
+  return parts.length ? parts.join("\n") : null;
+}
+
+// WorkBuddy injects <system-reminder>, <identity_context>, <project_context>,
+// <connector-status>, <product_identity>, <current_time>, <memory_and_skills_reminder>
+// etc. into the first user message's text field. The real user prompt is typically
+// inside <user_query>...</user_query> tags. This function strips injected context
+// and extracts the actual user prompt.
+function stripInjectedContext(text, maxChars = 200) {
+  // 1. If <user_query> tags are present, extract just that content.
+  const qMatch = text.match(/<user_query>([\s\S]*?)<\/user_query>/i);
+  if (qMatch) {
+    return qMatch[1].trim().slice(0, maxChars);
+  }
+  // 2. Strip <system-reminder>...</system-reminder> blocks.
+  let stripped = text.replace(/<system-reminder[\s\S]*?<\/system-reminder>/gi, "");
+  // 3. Strip other common injected XML blocks.
+  stripped = stripped.replace(/<identity_context>[\s\S]*?<\/identity_context>/gi, "");
+  stripped = stripped.replace(/<project_context>[\s\S]*?<\/project_context>/gi, "");
+  stripped = stripped.replace(/<connector-status>[\s\S]*?<\/connector-status>/gi, "");
+  stripped = stripped.replace(/<product_identity>[\s\S]*?<\/product_identity>/gi, "");
+  stripped = stripped.replace(/<current_time>[\s\S]*?<\/current_time>/gi, "");
+  stripped = stripped.replace(/<memory_and_skills_reminder>[\s\S]*?<\/memory_and_skills_reminder>/gi, "");
+  stripped = stripped.replace(/<user_info>[\s\S]*?<\/user_info>/gi, "");
+  stripped = stripped.replace(/<project_layout>[\s\S]*?<\/project_layout>/gi, "");
+  stripped = stripped.trim();
+  if (!stripped) return text.slice(0, maxChars);
+  return stripped.slice(0, maxChars);
 }
 
 function mapWorkBuddyLine(obj, sessionId, seq) {

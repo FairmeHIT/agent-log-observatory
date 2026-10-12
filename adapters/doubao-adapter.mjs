@@ -2,7 +2,7 @@ import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig } from "../lib/config.mjs";
 import { normalizeEvent, normalizeSession } from "../lib/normalizer.mjs";
 import { makeDataCompleteness, makeMetricResult } from "../lib/evidence.mjs";
-import { computeSuccessRate } from "../lib/metrics.mjs";
+import { computeSuccessRate, computeSessionFirstResponseMs, makeErrorCountMetrics } from "../lib/metrics.mjs";
 import { getFileObservations } from "../lib/observatory-db.mjs";
 import {
   readAttempts, hasCollectorData, readAllAttempts, filterByTimeWindow,
@@ -48,11 +48,22 @@ export class DoubaoAdapter extends BaseAdapter {
 
   async capabilities(context) {
     const collectorActive = await hasCollectorData("doubao");
+    // Check if collector has captured model (model_item_key from postData)
+    let hasModel = false;
+    if (collectorActive) {
+      try {
+        const all = await readAllAttempts("doubao");
+        hasModel = all.some((a) => a.requested_model != null);
+      } catch {}
+    }
+    const missing = [];
+    if (!hasModel) missing.push("model");
+    if (!collectorActive) missing.push("tokens", "ttft");
     return {
       has_tokens: collectorActive, has_ttft: collectorActive, has_retry: collectorActive,
-      has_model_routing: false, has_event_stream: true,
+      has_model_routing: hasModel, has_event_stream: true,
       has_step: true, has_tool_calls: true, has_human_confirm: true,
-      missing_fields: collectorActive ? ["model"] : MISSING,
+      missing_fields: collectorActive ? missing : [...missing, "model"],
       collector_active: collectorActive,
     };
   }
@@ -113,6 +124,41 @@ export class DoubaoAdapter extends BaseAdapter {
     return events;
   }
 
+  async extractExcerpt(sessionId, maxChars = 200) {
+    const cfg = resolveAgentConfig("doubao");
+    const agentsDir = path.join(cfg.sessionsRoot, sessionId, "agents");
+    const agents = await readDirSafe(agentsDir);
+    let firstUserText = null;
+    let lastAssistantText = null;
+    for (const agentId of agents) {
+      const trajPath = path.join(agentsDir, agentId, "system", "trajectory.jsonl");
+      try { await fs.access(trajPath); } catch { continue; }
+      const content = await fs.readFile(trajPath, "utf8");
+      for (const line of content.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const obj = JSON.parse(t);
+          if (!obj.content) continue;
+          const text = String(obj.content);
+          if (obj.role === "user" && firstUserText === null) {
+            firstUserText = text.slice(0, maxChars);
+          }
+          if (obj.role === "assistant") {
+            lastAssistantText = text.slice(0, maxChars);
+          }
+        } catch {}
+      }
+    }
+    return {
+      session_id: sessionId,
+      agent_object: "doubao",
+      first_user_message: firstUserText,
+      last_assistant_message: lastAssistantText,
+      last_assistant_model: null,
+    };
+  }
+
   async extractCalls(sessionId, options = {}) {
     const cfg = resolveAgentConfig("doubao");
     const llmCalls = [];
@@ -120,6 +166,30 @@ export class DoubaoAdapter extends BaseAdapter {
     const agentsDir = path.join(cfg.sessionsRoot, sessionId, "agents");
     const agents = await readDirSafe(agentsDir);
     let seq = 0;
+
+    // Collector attempts for this session's time window (model + tool_calls from CDP)
+    let collectorAttempts = [];
+    try {
+      let since = null, until = null;
+      for (const agentId of agents) {
+        const trajPath = path.join(agentsDir, agentId, "system", "trajectory.jsonl");
+        try {
+          const st = await fs.stat(trajPath);
+          if (st.birthtimeMs) since = since == null ? st.birthtimeMs : Math.min(since, st.birthtimeMs);
+          until = until == null ? st.mtimeMs : Math.max(until, st.mtimeMs);
+        } catch {}
+      }
+      if (since != null && until != null && until >= since) {
+        collectorAttempts = filterByTimeWindow(await readAllAttempts("doubao"), since, until);
+      } else {
+        collectorAttempts = await readAllAttempts("doubao");
+      }
+    } catch {}
+    // Model from most recent collector attempt with model data
+    const withModel = collectorAttempts.filter((a) => a.requested_model != null);
+    const modelFromCollector = withModel.length > 0 ? withModel[withModel.length - 1].requested_model : null;
+    // Tool calls from collector WS frames
+    const collectorToolCalls = collectorAttempts.flatMap((a) => a.tool_calls || []);
 
     for (const agentId of agents) {
       const trajPath = path.join(agentsDir, agentId, "system", "trajectory.jsonl");
@@ -137,9 +207,9 @@ export class DoubaoAdapter extends BaseAdapter {
               llm_call_id: callId,
               session_id: sessionId,
               agent_object: "doubao",
-              requested_model: null,
-              routed_model: null,
-              provider: null,
+              requested_model: modelFromCollector,
+              routed_model: modelFromCollector,
+              provider: "doubao",
               requested_at: null,
               first_output_at: null,
               generation_ended_at: null,
@@ -170,6 +240,28 @@ export class DoubaoAdapter extends BaseAdapter {
           }
           lineIdx++;
         } catch {}
+      }
+    }
+    // Merge CDP-captured tool calls from WS notification frames (cmd_type=10028)
+    // These may include tool calls not in trajectory (e.g. interaction.ask)
+    for (const ctc of collectorToolCalls) {
+      // Skip if already captured from trajectory (match by tool_name + approximate time)
+      const existing = toolCalls.some((tc) =>
+        tc.tool_name === ctc.tool_name ||
+        tc.call_id === ctc.tool_call_id
+      );
+      if (!existing) {
+        toolCalls.push({
+          call_id: ctc.tool_call_id || `doubao_cdp_tool_${toolCalls.length}`,
+          session_id: sessionId,
+          agent_object: "doubao",
+          tool_name: ctc.tool_name || null,
+          started_at: ctc.received_at || null,
+          ended_at: ctc.received_at || null,
+          status: ctc.ask_human_type ? "running" : "ok",
+          exit_code: null,
+          llm_call_id: null,
+        });
       }
     }
     return { llm_calls: llmCalls, tool_calls: toolCalls };
@@ -224,6 +316,7 @@ export class DoubaoAdapter extends BaseAdapter {
     const llmOk = toolCalls.filter((c) => c.status === "ok").length;
     const toolOk = toolCalls.filter((c) => c.status === "ok").length;
     const toolError = toolCalls.filter((c) => c.status === "error").length;
+    const llmError = llmCalls.filter((c) => c.status === "error").length;
 
     const events = await this.extractEvents(sessionId);
     const userCount = events.filter((e) => e.event_category === "agent.input").length;
@@ -260,6 +353,9 @@ export class DoubaoAdapter extends BaseAdapter {
 
     // Aggregate token usage from collector attempts
     let tokenInput = null, tokenOutput = null, tokenTotal = null, tokenCacheRead = null;
+    // Extract model + context window from collector attempts
+    let modelRouted = null;
+    let contextWindow = null;
     if (collectorActive) {
       const withUsage = collectorAttempts.filter((a) => a.usage && (a.usage.input != null || a.usage.output != null));
       if (withUsage.length > 0) {
@@ -267,6 +363,15 @@ export class DoubaoAdapter extends BaseAdapter {
         tokenOutput = withUsage.reduce((s, a) => s + (a.usage.output || 0), 0);
         tokenCacheRead = withUsage.reduce((s, a) => s + (a.usage.cache_read || 0), 0);
         tokenTotal = tokenInput + tokenOutput;
+      }
+      // Model + context window from the most recent attempt with data
+      const withModel = collectorAttempts.filter((a) => a.requested_model != null);
+      if (withModel.length > 0) {
+        modelRouted = withModel[withModel.length - 1].requested_model;
+      }
+      const withCtx = collectorAttempts.filter((a) => a.context_window != null);
+      if (withCtx.length > 0) {
+        contextWindow = withCtx[withCtx.length - 1].context_window;
       }
     }
 
@@ -323,6 +428,8 @@ export class DoubaoAdapter extends BaseAdapter {
       } catch {}
     }
 
+    const failures = await this.extractFailures(sessionId);
+
     return [
       makeMetricResult("llm_call_count", llmCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("tool_call_count", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
@@ -361,6 +468,8 @@ export class DoubaoAdapter extends BaseAdapter {
       collectorActive
         ? computeTtftFromAttempts(collectorAttempts, sessionId)
         : makeMetricResult("llm_attempt_ttft_ms", null, { unit: "ms", scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented" }),
+      // session_first_response_ms: trajectory.jsonl 无时间戳，无法计算
+      makeMetricResult("session_first_response_ms", null, { unit: "ms", scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented", evidence_grade: "unknown", semantic_profile: "session_start_to_first_llm_response" }),
       // LLM retry: collector first, fallback not_instrumented
       collectorActive
         ? computeRetryFromAttempts(collectorAttempts, sessionId)
@@ -372,8 +481,21 @@ export class DoubaoAdapter extends BaseAdapter {
         ? makeMetricResult("session_lifespan_ms", sessionLifespanMs, { unit: "ms", scope: "session", scope_id: sessionId, evidence_grade: "derived", semantic_profile: "file_observation_span" })
         : makeMetricResult("session_lifespan_ms", null, { unit: "ms", scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented" }),
       makeMetricResult("credits", null, { scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented" }),
-      makeMetricResult("max_context", null, { unit: "tokens", scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented" }),
-      makeMetricResult("context_window", null, { unit: "tokens", scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented" }),
+      makeMetricResult("max_context", contextWindow != null ? contextWindow : null, {
+        unit: "tokens", scope: "session", scope_id: sessionId,
+        state: contextWindow != null ? "captured" : "not-captured",
+        missing_reason: contextWindow != null ? null : "not_instrumented",
+        evidence_grade: contextWindow != null ? "direct" : "unknown",
+        semantic_profile: "postData.model_extra_params.total_window_size",
+      }),
+      makeMetricResult("context_window", contextWindow != null ? contextWindow : null, {
+        unit: "tokens", scope: "session", scope_id: sessionId,
+        state: contextWindow != null ? "captured" : "not-captured",
+        missing_reason: contextWindow != null ? null : "not_instrumented",
+        evidence_grade: contextWindow != null ? "direct" : "unknown",
+        semantic_profile: "postData.model_extra_params.total_window_size",
+      }),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
     ];
   }
 }

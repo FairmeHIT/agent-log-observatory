@@ -96,6 +96,42 @@
         "decision": { "type": ["string", "null"], "enum": ["allow", "deny", "modified", null] }
       }
     },
+    "context_window": {
+      "type": ["integer", "string", "null"],
+      "description": "Context window size in tokens (from postData, Doubao model_extra_params.total_window_size)"
+    },
+    "reasoning_effort": {
+      "type": ["integer", "null"],
+      "description": "Reasoning/thinking effort level (Doubao model_config.reasoning_effort)"
+    },
+    "bot_id": {
+      "type": ["string", "null"],
+      "description": "Bot ID (Doubao client_meta.bot_id)"
+    },
+    "agent_mode": {
+      "type": ["integer", "null"],
+      "description": "Agent mode flag (Doubao option.agent_mode)"
+    },
+    "sandbox_id": {
+      "type": ["string", "null"],
+      "description": "Agent sandbox ID (Doubao general_task_param.sandbox_id)"
+    },
+    "tool_calls": {
+      "type": ["array", "null"],
+      "description": "Tool calls captured from WebSocket notification frames (Doubao cmd_type=10028)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "tool_call_id": { "type": ["string", "null"] },
+          "tool_name": { "type": ["string", "null"] },
+          "agent_id": { "type": ["string", "null"] },
+          "sandbox_id": { "type": ["string", "null"] },
+          "message_id": { "type": ["string", "null"] },
+          "ask_human_type": { "type": ["string", "null"] },
+          "received_at": { "type": ["number", "null"] }
+        }
+      }
+    },
     "collector": { "type": "string" },
     "collector_version": { "type": "string" },
     "collected_at": {

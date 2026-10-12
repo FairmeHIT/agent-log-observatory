@@ -12,8 +12,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import {
   getDB, upsertSession, upsertMetrics, insertResourceSnapshot,
-  getDBResourceHistory, getDBStats, getKnownSessionIds, hasSessionMetrics, upsertSyncLog,
-  cleanOldMetrics, getDBSyncLog, closeDB,
+  getDBResourceHistory, getDBStats, getKnownSessionIds, hasSessionMetrics, hasNotCapturedRefreshable, upsertSyncLog,
+  cleanOldMetrics, purgePrewarmSessions, getDBSyncLog, closeDB,
   getDBSessionItems, getDBSessionItem, getDBSessionMetrics,
   upsertEvents, getDBEvents, upsertUsage, getDBUsage, upsertTimeline, getDBTimeline,
   insertFileObservation, getFileObservations, getLastObservation,
@@ -59,13 +59,14 @@ function jsonFiltered(res, data, status = 200) {
 }
 
 const COMPARE_METRICS = [
-  "turn_e2e_ms", "session_lifespan_ms", "llm_attempt_ttft_ms",
+  "turn_e2e_ms", "session_lifespan_ms", "llm_attempt_ttft_ms", "session_first_response_ms",
   "token_input", "token_output", "token_cache_read", "token_reasoning", "token_total",
   "credits",   "max_context", "context_window", "cache_hit_rate",
   "llm_call_count", "success_rate", "llm_retry_count",
   "tool_call_count", "human_confirm_count", "step_count", "compaction_count", "compaction_threshold",
   "event_count_agent_input", "event_count_llm_request", "event_count_llm_response",
   "event_count_tool_call", "event_count_tool_result",
+  "llm_error_count", "tool_error_count", "dependency_error_count", "agent_error_count",
   "failures_tool", "failures_model",
   "failures_dependency", "failures_agent",
 ];
@@ -354,30 +355,20 @@ async function syncAgentData(agentName, adapter) {
       if (!sid) continue;
       // Write session metadata
       upsertSession(agentName, s);
-      // Extract metrics for new sessions OR known sessions missing metrics
-      const needsMetrics = !knownIds.has(sid) || !hasSessionMetrics(agentName, sid);
+      // Extract metrics for new sessions OR known sessions missing/revisit metrics
+      const needsMetrics = !knownIds.has(sid) || !hasSessionMetrics(agentName, sid)
+        || hasNotCapturedRefreshable(agentName, sid);
       if (needsMetrics) {
         try {
-          const [metrics, failures, events, usage, timeline] = await Promise.all([
+          // extractMetrics already calls extractFailures internally via makeErrorCountMetrics,
+          // so we don't call extractFailures separately here to avoid double I/O.
+          const [metrics, events, usage, timeline] = await Promise.all([
             adapter.extractMetrics(sid),
-            adapter.extractFailures ? adapter.extractFailures(sid) : Promise.resolve({ summary: {} }),
             adapter.extractEvents ? adapter.extractEvents(sid) : Promise.resolve([]),
             adapter.extractUsage ? adapter.extractUsage(sid) : Promise.resolve([]),
             adapter.extractTimeline ? adapter.extractTimeline(sid) : Promise.resolve([]),
           ]);
-          // Merge failures into metrics
-          const allMetrics = [...metrics];
-          const fsum = (failures && failures.summary) || {};
-          const failuresNc = failures && failures.source_available === false;
-          for (const cat of ["gateway", "tool", "model", "dependency", "agent"]) {
-            allMetrics.push({
-              metric: "failures_" + cat,
-              value: failuresNc ? null : (fsum[cat] || 0),
-              state: failuresNc ? "not-captured" : "captured",
-              missing_reason: failuresNc ? "source_unavailable" : null,
-            });
-          }
-          upsertMetrics(agentName, sid, allMetrics);
+          upsertMetrics(agentName, sid, metrics);
           try { if (events?.length) upsertEvents(agentName, sid, events); } catch {}
           try { if (usage?.length) upsertUsage(agentName, sid, usage); } catch {}
           try { if (timeline?.length) upsertTimeline(agentName, sid, timeline); } catch {}
@@ -403,6 +394,8 @@ async function syncAllAgents() {
     }
     // Clean old data
     cleanOldMetrics();
+    // Purge prewarm sessions that may have been synced before filtering was added
+    purgePrewarmSessions("workbuddy");
   } finally {
     syncRunning = false;
   }
@@ -869,6 +862,21 @@ async function handleApi(req, res, url) {
     const items = await adapter.extractEvents(sessionId);
     try { if (items?.length) upsertEvents(agent, sessionId, items); } catch {}
     return jsonFiltered(res, { items: items || [], source: "live" });
+  }
+
+  // Excerpt: 实时从 transcript 读取对话摘要（不落盘），经 redact 脱敏
+  const excerptMatch = p.match(/^\/api\/sessions\/(\w+)\/default\/([^/]+)\/excerpt$/);
+  if (excerptMatch) {
+    const [, agent, sessionId] = excerptMatch;
+    const adapter = adapters[agent];
+    if (!adapter) return json(res, { error: "unknown_agent" }, 404);
+    if (!adapter.extractExcerpt) return json(res, { error: "not_supported" }, 404);
+    try {
+      const excerpt = await adapter.extractExcerpt(sessionId);
+      return json(res, redact(excerpt));
+    } catch (e) {
+      return json(res, { error: e.message });
+    }
   }
 
   const usageMatch = p.match(/^\/api\/sessions\/(\w+)\/default\/([^/]+)\/usage$/);

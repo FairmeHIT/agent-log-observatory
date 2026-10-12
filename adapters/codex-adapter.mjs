@@ -8,6 +8,8 @@ import {
   computeSessionTurnE2eAvg,
   aggregateTokens,
   computeCacheHitRate,
+  computeSessionFirstResponseMs,
+  makeErrorCountMetrics,
 } from "../lib/metrics.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -300,6 +302,12 @@ export class CodexAdapter extends BaseAdapter {
     const lifespan = computeSessionLifespanMs(tr.created_at_ms ?? null, tr.updated_at_ms ?? null);
     lifespan.scope_id = sessionId;
 
+    // session_first_response_ms: 首个 reasoning/agentMessage 的 started_at_ms − thread created_at_ms
+    const firstRespRows = await this._query("thread_history_1.sqlite",
+      `SELECT MIN(started_at_ms) as first_resp FROM thread_items WHERE thread_id = '${esc(sessionId)}' AND item_type IN ('reasoning','agentMessage')`
+    );
+    const firstResponseEpoch = firstRespRows[0]?.first_resp ?? null;
+
     const compactionRows = await this._query("thread_history_1.sqlite",
       `SELECT COUNT(*) as cnt FROM thread_items WHERE thread_id = '${esc(sessionId)}' AND item_type = 'contextCompaction'`
     );
@@ -322,6 +330,8 @@ export class CodexAdapter extends BaseAdapter {
       ? (tokens.reported_total || null)
       : (tr.tokens_used ?? null);
 
+    const failures = await this.extractFailures(sessionId);
+
     return [
       makeMetricResult("llm_attempt_ttft_ms", ttftMs, {
         unit: "ms", scope: "session", scope_id: sessionId,
@@ -329,6 +339,7 @@ export class CodexAdapter extends BaseAdapter {
         missing_reason: ttftMs != null ? null : "missing_first_chunk",
         evidence_grade: ttftMs != null ? "derived" : "unknown",
       }),
+      computeSessionFirstResponseMs(tr.created_at_ms ?? null, firstResponseEpoch, sessionId),
       turnE2e,
       lifespan,
       makeMetricResult("token_input", hasTokenBreakdown ? (tokens.input || null) : null, {
@@ -417,6 +428,7 @@ export class CodexAdapter extends BaseAdapter {
         scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
       }),
+      ...makeErrorCountMetrics(llmError, toolCalls.filter(c => c.status === "error").length, failures, sessionId),
     ];
   }
 

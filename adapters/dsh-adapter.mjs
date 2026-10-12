@@ -9,6 +9,8 @@ import {
   aggregateTokens,
   computeSessionTurnE2eAvg,
   computeSessionLifespanMs,
+  computeSessionFirstResponseMs,
+  makeErrorCountMetrics,
 } from "../lib/metrics.mjs";
 import { zstdDecompressSync } from "node:zlib";
 import path from "node:path";
@@ -243,11 +245,17 @@ export class DshAdapter extends BaseAdapter {
     const lifespan = computeSessionLifespanMs(firstTs, lastTs);
     lifespan.scope_id = sessionId;
 
+    // session_first_response_ms: 首个 text-chunks/reasoning-chunks 事件时间 − session 首事件时间
+    const firstResponseEv = events.find(e => (e.type === "text-chunks" || e.type === "reasoning-chunks") && (e.time ?? e.time0) != null);
+    const firstResponseEpoch = firstResponseEv ? (firstResponseEv.time ?? firstResponseEv.time0) : null;
+
     const userMsgCount = stats?.turns || new Set(events.filter(e => e.data?.turn != null).map(e => e.data.turn)).size;
     const assistantMsgCount = events.filter((e) => e.type === "text-chunks").length;
     const funcCallCount = toolCalls.length;
     const funcResultCount = toolCalls.length;
     const reasoningCount = events.filter((e) => e.type === "reasoning-chunks").length;
+
+    const failures = await this.extractFailures(sessionId);
 
     return [
       makeMetricResult("llm_attempt_ttft_ms", ttftMs, {
@@ -257,6 +265,7 @@ export class DshAdapter extends BaseAdapter {
         evidence_grade: ttftMs != null ? "derived" : "unknown",
         semantic_profile: "mean_step_ttft",
       }),
+      computeSessionFirstResponseMs(firstTs ?? null, firstResponseEpoch, sessionId),
       turnE2e,
       lifespan,
       makeMetricResult("token_input", tokens.input || null, {
@@ -329,6 +338,7 @@ export class DshAdapter extends BaseAdapter {
         scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
       }),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
     ];
   }
 

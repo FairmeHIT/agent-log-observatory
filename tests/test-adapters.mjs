@@ -140,6 +140,26 @@ describe("WorkBuddy Adapter", () => {
       else delete process.env.AGENT_LOG_WORKBUDDY_DATADIR;
     }
   });
+
+  test("extractSessions filters prewarm-wb-pool sessions", async () => {
+    const a = new WorkBuddyAdapter();
+    const fixtureDataDir = path.join(fixtureDir, "workbuddy-sample");
+    const origDataDir = process.env.AGENT_LOG_WORKBUDDY_DATADIR;
+    process.env.AGENT_LOG_WORKBUDDY_DATADIR = fixtureDataDir;
+    try {
+      const r = await a.extractSessions();
+      // sessions/ 下有 2 个文件：session-99999.json (interactive) + session-99998.json (prewarm)
+      // prewarm session 应被过滤
+      assert.equal(r.items.length, 1, "prewarm session must be filtered out");
+      assert.equal(r.items[0].session_id, "fixture-session-001");
+      assert.equal(r.coverage.skipped_prewarm, 1, "skipped_prewarm count must be 1");
+      // ai-title 行应被采集为 title
+      assert.equal(r.items[0].title, "Fixture 测试任务", "title must be extracted from ai-title line");
+    } finally {
+      if (origDataDir) process.env.AGENT_LOG_WORKBUDDY_DATADIR = origDataDir;
+      else delete process.env.AGENT_LOG_WORKBUDDY_DATADIR;
+    }
+  });
 });
 
 describe("TeleAgent Adapter", () => {

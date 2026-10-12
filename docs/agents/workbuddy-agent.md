@@ -19,6 +19,7 @@ NDJSON 格式，每个 session 一份文件。每行一条事件，type 字段�
 | type | role | 含义 | 关键字段 | 映射 |
 |---|---|---|---|---|
 | `session-meta` | — | 会话元数据 | `sessionId`、`meta` | 会话元信息 |
+| `ai-title` | — | AI 生成的任务/会话标题 | `aiTitle` | **session.title**（采集时读取前 16KB） |
 | `message` | `user` | 用户输入 | `content`、`timestamp`、`providerData.permissionMode` | **agent.input** |
 | `message` | `assistant` | LLM 响应 | `content`、`providerData.rawUsage`、`providerData.model`、`status` | **llm.response** |
 | `reasoning` | — | 推理/思考步骤 | `rawContent[].text`、`providerData.model`、`providerData.traceId` | **思考（Step）** |
@@ -123,12 +124,15 @@ NDJSON 格式，每个 session 一份文件。每行一条事件，type 字段�
 | 字段 | 说明 |
 |---|---|
 | pid | 进程 PID |
-| sessionId | 会话 UUID |
+| sessionId | 会话 UUID（预热池 session 以 `prewarm-wb-pool-` 开头，会被适配器过滤） |
 | cwd | 工作目录 |
 | startedAt | 启动时间（epoch ms） |
+| kind | 会话类型（`interactive` 为用户交互会话；`prewarm` 等非交互类型会被过滤） |
 | version | WorkBuddy 版本 |
 | os / arch / hostname | 环境信息 |
 | endpoint | 本地 HTTP 端口 |
+
+> **预热池 session 过滤**：WorkBuddy 会创建 `prewarm-wb-pool-*` 命名的进程池预热会话（`kind` 非 `interactive`，`cwd` 指向安装目录），这些不是真实用户任务。适配器 `extractSessions` 会跳过 `sessionId` 以 `prewarm-wb-pool` 开头或 `kind` 非 `interactive` 的 session，不计入指标计算。被跳过数量记入 `coverage.skipped_prewarm`。
 
 ### 应用运行日志：`~/.workbuddy/logs/`
 

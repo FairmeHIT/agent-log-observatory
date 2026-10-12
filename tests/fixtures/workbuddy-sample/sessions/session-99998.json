@@ -1,0 +1,16 @@
+{
+  "pid": 99998,
+  "lastHeartbeat": 1790503732000,
+  "sessionId": "prewarm-wb-pool-1790503700000-abc123",
+  "cwd": "D:/02-software-install/workbuddy",
+  "startedAt": 1790503695000,
+  "kind": "prewarm",
+  "url": "http://127.0.0.1:99998",
+  "endpoint": "http://127.0.0.1:99998",
+  "mode": "local",
+  "version": "2.147.0",
+  "os": "win32",
+  "arch": "x64",
+  "hostname": "test-host",
+  "updatedAt": 1790503732001
+}

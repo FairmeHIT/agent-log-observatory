@@ -2,7 +2,7 @@ import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig, config as globalConfig } from "../lib/config.mjs";
 import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/normalizer.mjs";
 import { makeDataCompleteness, makeMetricResult } from "../lib/evidence.mjs";
-import { computeSuccessRate, computeCacheHitRate, computeOutputTps, aggregateTokens, computeSessionTurnE2eAvg, computeSessionLifespanMs } from "../lib/metrics.mjs";
+import { computeSuccessRate, computeCacheHitRate, computeOutputTps, aggregateTokens, computeSessionTurnE2eAvg, computeSessionLifespanMs, computeSessionFirstResponseMs, makeErrorCountMetrics } from "../lib/metrics.mjs";
 import { querySqlite } from "../lib/sqlite-query.mjs";
 import {
   hasCollectorData,
@@ -97,6 +97,38 @@ export class MobileworkAdapter extends BaseAdapter {
     const sqliteExe = globalConfig.sqliteExecutable;
     const rows = await query(sqliteExe, dbPath, `SELECT type, data, seq FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
     return rows.map((r, i) => normalizeEvent(mapMobileworkEvent(r, sessionId, i)));
+  }
+
+  async extractExcerpt(sessionId, maxChars = 200) {
+    const cfg = resolveAgentConfig("mobilework");
+    const dbPath = path.join(cfg.dataDir, "xdg", "data", "opencode", "opencode.db");
+    const sqliteExe = globalConfig.sqliteExecutable;
+    const sid = sessionId.replace(/'/g, "''");
+    // 用 json_extract 在 SQL 层提取标量字段，避免 sqlite3 CLI 的 JSON 转义问题
+    // 用 json_extract 在 SQL 层提取标量字段，replace 去掉换行符避免 list 模式行分割错位
+    const rows = await query(sqliteExe, dbPath,
+      `SELECT json_extract(p.data,'$.type') as ptype, replace(json_extract(p.data,'$.text'), char(10), ' ') as ptext, json_extract(m.data,'$.role') as mrole, json_extract(m.data,'$.model.modelID') as mmodel FROM part p LEFT JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sid}' ORDER BY p.time_created ASC`);
+    let firstUserText = null;
+    let lastAssistantText = null;
+    let lastAssistantModel = null;
+    for (const r of rows) {
+      if (r.ptype !== "text" || !r.ptext) continue;
+      const text = String(r.ptext);
+      if (r.mrole === "user" && firstUserText === null) {
+        firstUserText = text.slice(0, maxChars);
+      }
+      if (r.mrole === "assistant") {
+        lastAssistantText = text.slice(0, maxChars);
+        lastAssistantModel = r.mmodel || null;
+      }
+    }
+    return {
+      session_id: sessionId,
+      agent_object: "mobilework",
+      first_user_message: firstUserText,
+      last_assistant_message: lastAssistantText,
+      last_assistant_model: lastAssistantModel,
+    };
   }
 
   async extractUsage(sessionId, options = {}) {
@@ -421,10 +453,18 @@ export class MobileworkAdapter extends BaseAdapter {
         }, 0);
     }
 
+    // session_first_response_ms: 首条 assistant 输出时间 − session 开始时间
+    const firstRespRows = await query(sqliteExe, dbPath,
+      `SELECT MIN(p.time_created) as first_resp FROM part p LEFT JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId.replace(/'/g, "''")}' AND json_extract(m.data,'$.role') = 'assistant' AND json_extract(p.data,'$.type') IN ('text','reasoning','step-finish')`);
+    const firstResponseEpoch = firstRespRows[0]?.first_resp ?? null;
+
+    const failures = await this.extractFailures(sessionId);
+
     return [
       turnE2e,
       lifespan,
       ttftResult,
+      computeSessionFirstResponseMs(sr.time_created ?? null, firstResponseEpoch, sessionId),
       makeMetricResult("token_input", tokens.input || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("token_output", tokens.output || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("token_cache_read", tokens.cache_read || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
@@ -452,6 +492,7 @@ export class MobileworkAdapter extends BaseAdapter {
         missing_reason: humanConfirmCount != null ? null : "not_instrumented",
         semantic_profile: "inferred_from_permission_ask_rules_x_tool_called",
       }),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
     ];
   }
 

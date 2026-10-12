@@ -1,18 +1,25 @@
 // collectors/doubao-cdp-collector/index.mjs
 //
 // Doubao CDP Collector: 通过 Chrome DevTools Protocol 抓取豆包 LLM 网络请求，
-// 采集 attempt 级时延（TTFT / token usage / retry）落盘到 Agent Log Observatory collector dir。
+// 采集 attempt 级时延（TTFT / token usage / retry / tool calls）落盘到 Agent Log Observatory collector dir。
 //
-// 前提：Doubao 需以 --remote-debugging-port=9223 启动。
+// 前提：Doubao 需以 --remote-debugging-port=<PORT> 启动（默认 9223，可用 DOUBAO_CDP_PORT 覆盖）。
 //   "D:\02-software-install\doubao-zijie\Doubao\app\Doubao.exe" --remote-debugging-port=9223
 //
 // 原理：
 //   WebSocket → CDP Network 域
 //     Network.requestWillBeSent  → requested_at + model/conversation (from postData)
 //     Network.responseReceived   → http_status + content-type
-//     Network.streamDataReceived → first_output_at (TTFT, 首个 data chunk)
+//     Network.streamDataReceived → first_output_at (TTFT, 首个 data chunk) [注：豆包 SSE 实测不触发]
 //     Network.loadingFinished    → stream_ended_at + getResponseBody → SSE usage
 //     Network.loadingFailed      → status=error + error_kind
+//     Network.webSocketFrameReceived → 解码 base64+protobuf payload，提取 tool_call 通知
+//
+// 已知限制（探测确认）：
+//   - streamDataReceived 对豆包 SSE 从不触发（Chromium/CDP 限制），TTFT 仅为 derived
+//   - SSE 响应体不含 usage/token 字段（源限制），token 全部 null
+//   - 模型名从 postData.option.model_config.model_item_key 提取（非标准 model 字段）
+//   - 工具调用从 WebSocket 通知帧（cmd_type=10028）提取
 //
 // 落盘：runtime/collectors/doubao/attempts-<YYYYMMDD>.jsonl
 // 字段对齐 schemas/collector-attempt.schema.json（collector-attempt-0.1.0）。
@@ -24,7 +31,7 @@ import http from "node:http";
 
 const SCHEMA_VERSION = "collector-attempt-0.1.0";
 const COLLECTOR_NAME = "doubao-cdp-collector";
-const COLLECTOR_VERSION = "0.1.0";
+const COLLECTOR_VERSION = "0.2.0";
 const DEBUG_PORT = Number(process.env.DOUBAO_CDP_PORT || 9223);
 const LLM_URL_PATTERN = /\/chat\/completion/i;
 const RECONNECT_DELAY_MS = 5000;
@@ -126,6 +133,11 @@ function extractMeta(postData, url) {
   let model = null;
   let conversationId = null;
   let provider = null;
+  let contextWindow = null;
+  let reasoningEffort = null;
+  let botId = null;
+  let agentMode = null;
+  let sandboxId = null;
 
   // Try URL params first
   try {
@@ -137,24 +149,51 @@ function extractMeta(postData, url) {
   if (postData) {
     try {
       const body = JSON.parse(postData);
+      // Standard API paths (other agents may use these)
       model = body.model || body.model_id || body.deploy_name || body.parameters?.model || null;
       provider = body.provider || body.channel || null;
       conversationId = conversationId ||
         body.conversation_id || body.conversationId || body.conv_id ||
         body.client_meta?.conversation_id || body.metadata?.conversation_id || null;
+      // Doubao-specific nested paths (探测确认的 postData 结构)
+      const opt = body.option;
+      if (opt) {
+        const mc = opt.model_config;
+        if (mc) {
+          if (!model) model = mc.model_item_key || mc.model || null;
+          contextWindow = mc.model_extra_params?.total_window_size || null;
+          reasoningEffort = mc.reasoning_effort ?? null;
+        }
+        agentMode = opt.agent_mode ?? null;
+        const gtp = opt.general_task_param;
+        if (gtp) {
+          sandboxId = gtp.sandbox_id || null;
+        }
+      }
+      botId = body.client_meta?.bot_id || null;
     } catch {}
     // Regex fallback for model + conversation_id (postData may be deeply nested)
     if (!model) {
-      const m = postData.match(/"model"\s*:\s*"([^"]+)"/);
+      // Doubao uses "model_item_key":"9" (not standard "model":"...")
+      const m = postData.match(/"model_item_key"\s*:\s*"([^"]+)"/) ||
+                postData.match(/"model"\s*:\s*"([^"]+)"/);
       if (m) model = m[1];
     }
     if (!conversationId) {
       const c = postData.match(/"conversation_?[iI]d"\s*:\s*"([^"]+)"/);
       if (c) conversationId = c[1];
     }
+    if (contextWindow == null) {
+      const cw = postData.match(/"total_window_size"\s*:\s*"?(\d+)/);
+      if (cw) contextWindow = parseInt(cw[1], 10);
+    }
+    if (!botId) {
+      const b = postData.match(/"bot_id"\s*:\s*"([^"]+)"/);
+      if (b) botId = b[1];
+    }
   }
 
-  return { model, conversationId, provider };
+  return { model, conversationId, provider, contextWindow, reasoningEffort, botId, agentMode, sandboxId };
 }
 
 // ---- Parse SSE response body for usage ----
@@ -250,11 +289,46 @@ function extractModelFromBody(body) {
   return m ? m[1] : null;
 }
 
+// ---- Decode Doubao WebSocket frame payload ----
+// 豆包 WS 帧是 base64 编码的 protobuf，内嵌 JSON。探测确认 cmd_type=10028 携带 tool_call 通知。
+function decodeWsFramePayload(payloadData) {
+  if (!payloadData || payloadData.length <= 3) return null; // skip pings
+  // "hi" (2 bytes) = WebSocket ping/pong; longer payloads are base64-encoded protobuf
+  let raw = null;
+  try { raw = atob(payloadData); } catch { return null; }
+  if (!raw) return null;
+  // Extract embedded JSON (protobuf string fields contain JSON)
+  const s = raw.indexOf("{");
+  const e = raw.lastIndexOf("}");
+  if (s < 0 || e <= s) return null;
+  try { return JSON.parse(raw.substring(s, e + 1)); } catch { return null; }
+}
+
+// ---- Extract tool call info from decoded WS frame ----
+function extractToolCallFromWsFrame(decoded) {
+  if (!decoded) return null;
+  // cmd_type=10028 携带 tool_call 通知
+  const ext = decoded.cmd?.ext || decoded.ext;
+  if (!ext || (!ext.tool_call_id && !ext.tool_name)) return null;
+  return {
+    tool_call_id: ext.tool_call_id || null,
+    tool_name: ext.tool_name || null,
+    agent_id: ext.agent_id || null,
+    sandbox_id: ext.sandbox_id || null,
+    conversation_id: ext.conversation_id || null,
+    message_id: ext.message_id || null,
+    ask_human_type: ext.ask_human_type || null,
+    cmd_type: decoded.cmd?.cmd_type || null,
+  };
+}
+
 // ---- Attempt tracker ----
 // Key: requestId (CDP's unique request identifier)
 const attempts = new Map();
 const processedRequestIds = new Set(); // dedup across reconnects
 let attemptCounter = 0;
+// WS tool call events awaiting association with attempts by conversation_id + time window
+let toolCallEvents = [];
 
 function makeAttemptId(sessionHint) {
   attemptCounter++;
@@ -364,9 +438,17 @@ async function connectAndCapture() {
           error_kind: null,
           body_usage: null,
           url,
+          // New metadata from postData (探测确认的路径)
+          context_window: meta.contextWindow ?? null,
+          reasoning_effort: meta.reasoningEffort ?? null,
+          bot_id: meta.botId ?? null,
+          agent_mode: meta.agentMode ?? null,
+          sandbox_id: meta.sandboxId ?? null,
+          // Tool calls from WS frames (associated at finalize time)
+          tool_calls: null,
         });
 
-        diag({ req: requestId, aid, model: meta.model, conv: meta.conversationId, hasPostData: !!request?.postData, pdLen: (request?.postData || "").length, pdSnippet: (request?.postData || "").substring(0, 300) });
+        diag({ req: requestId, aid, model: meta.model, conv: meta.conversationId, botId: meta.botId, ctxWin: meta.contextWindow, reasoning: meta.reasoningEffort, hasPostData: !!request?.postData, pdLen: (request?.postData || "").length, pdSnippet: (request?.postData || "").substring(0, 300) });
       }
 
       else if (method === "Network.responseReceived") {
@@ -427,8 +509,27 @@ async function connectAndCapture() {
         if (!a) return;
         a.loading_failed = true;
         a.error_kind = canceled ? "cancelled" : (errorText || "network_error");
+        diag({ loadingFailed: requestId, errorText, canceled });
         finalizeAttempt(a);
         attempts.delete(requestId);
+      }
+
+      // ---- WebSocket frame capture: tool call notifications (cmd_type=10028) ----
+      // 豆包通过 WS 推送 tool_call 通知（base64+protobuf 编码），与 HTTP 请求并行。
+      // 按 conversation_id + 时间窗口关联到当前 attempt。
+      else if (method === "Network.webSocketFrameReceived" || method === "Network.webSocketFrameSent") {
+        const payload = params.response?.payloadData || "";
+        const decoded = decodeWsFramePayload(payload);
+        if (!decoded) return;
+        const toolCall = extractToolCallFromWsFrame(decoded);
+        if (!toolCall) return;
+        // Convert CDP monotonic timestamp to epoch ms
+        const eventTs = cdpToMs(params.timestamp);
+        diag({ ws_tool_call: params.requestId, ts: eventTs, toolName: toolCall.tool_name, toolCallId: toolCall.tool_call_id, conv: toolCall.conversation_id, cmdType: toolCall.cmd_type });
+        // Buffer for association with attempts
+        toolCallEvents.push({ ...toolCall, received_at: eventTs });
+        // Trim buffer to prevent unbounded growth
+        if (toolCallEvents.length > 200) toolCallEvents.shift();
       }
     } catch (e) {
       diag({ eventError: method, err: e?.message });
@@ -460,6 +561,29 @@ async function connectAndCapture() {
 function finalizeAttempt(a) {
   const status = a.loading_failed ? "error" : (a.http_status >= 200 && a.http_status < 400 ? "ok" : (a.http_status ? "error" : "ok"));
 
+  // Associate WS tool call events by conversation_id + time window
+  let associatedToolCalls = null;
+  if (a.session_id && a.session_id !== "default") {
+    const matched = toolCallEvents.filter((tc) =>
+      tc.conversation_id === a.session_id &&
+      tc.received_at != null &&
+      a.requested_at != null &&
+      tc.received_at >= a.requested_at &&
+      (a.stream_ended_at == null || tc.received_at <= a.stream_ended_at + 60000) // 60s grace after stream end
+    );
+    if (matched.length > 0) {
+      associatedToolCalls = matched.map((tc) => ({
+        tool_call_id: tc.tool_call_id,
+        tool_name: tc.tool_name,
+        agent_id: tc.agent_id,
+        sandbox_id: tc.sandbox_id,
+        message_id: tc.message_id,
+        ask_human_type: tc.ask_human_type,
+        received_at: tc.received_at,
+      }));
+    }
+  }
+
   const record = {
     schema_version: SCHEMA_VERSION,
     agent_object: "doubao",
@@ -486,13 +610,21 @@ function finalizeAttempt(a) {
     http_status: a.http_status,
     usage: a.body_usage,
     human_confirm: null,
+    // New metadata (探测确认从 postData 提取)
+    context_window: a.context_window ?? null,
+    reasoning_effort: a.reasoning_effort ?? null,
+    bot_id: a.bot_id ?? null,
+    agent_mode: a.agent_mode ?? null,
+    sandbox_id: a.sandbox_id ?? null,
+    // Tool calls from WS notification frames (cmd_type=10028)
+    tool_calls: associatedToolCalls,
     collector: COLLECTOR_NAME,
     collector_version: COLLECTOR_VERSION,
     collected_at: Date.now(),
   };
 
   queueAttempt(record);
-  diag({ finalized: a.attempt_id, status, ttft: a.first_output_at && a.requested_at ? a.first_output_at - a.requested_at : null, usage: a.body_usage });
+  diag({ finalized: a.attempt_id, status, ttft: a.first_output_at && a.requested_at ? a.first_output_at - a.requested_at : null, usage: a.body_usage, model: a.model, toolCalls: associatedToolCalls?.length || 0 });
 }
 
 // ---- Main loop with reconnection ----

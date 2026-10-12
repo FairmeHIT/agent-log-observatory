@@ -5,7 +5,8 @@ import { makeDataCompleteness, makeMetricResult } from "../lib/evidence.mjs";
 import { parseGoLogLine } from "../lib/log-parser.mjs";
 import {
   computeSuccessRate, computeCacheHitRate, computeOutputTps, aggregateTokens,
-  computeSessionLifespanMs, computeSessionTurnE2eAvg,
+  computeSessionLifespanMs, computeSessionTurnE2eAvg, computeSessionFirstResponseMs,
+  makeErrorCountMetrics,
 } from "../lib/metrics.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -170,6 +171,44 @@ export class TeleAgentAdapter extends BaseAdapter {
       return events;
     }
     return this._extractEventsFromLogs(sessionId);
+  }
+
+  async extractExcerpt(sessionId, maxChars = 200) {
+    const sid = esc(sessionId);
+    const rows = await this._dbQuery(
+      `SELECT json_extract(p.data,'$.type') as ptype, replace(json_extract(p.data,'$.text'), char(10), ' ') as ptext, json_extract(m.data,'$.role') as mrole, json_extract(m.data,'$.model.modelID') as mmodel FROM part p LEFT JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sid}' ORDER BY p.time_created ASC`
+    );
+    if (rows.length === 0) {
+      return {
+        session_id: sessionId,
+        agent_object: "teleagent",
+        first_user_message: null,
+        last_assistant_message: null,
+        last_assistant_model: null,
+        missing_reason: "no_db_available_or_empty",
+      };
+    }
+    let firstUserText = null;
+    let lastAssistantText = null;
+    let lastAssistantModel = null;
+    for (const r of rows) {
+      if (r.ptype !== "text" || !r.ptext) continue;
+      const text = String(r.ptext);
+      if (r.mrole === "user" && firstUserText === null) {
+        firstUserText = text.slice(0, maxChars);
+      }
+      if (r.mrole === "assistant") {
+        lastAssistantText = text.slice(0, maxChars);
+        lastAssistantModel = r.mmodel || null;
+      }
+    }
+    return {
+      session_id: sessionId,
+      agent_object: "teleagent",
+      first_user_message: firstUserText,
+      last_assistant_message: lastAssistantText,
+      last_assistant_model: lastAssistantModel,
+    };
   }
 
   async _extractEventsFromLogs(sessionId) {
@@ -434,6 +473,14 @@ export class TeleAgentAdapter extends BaseAdapter {
     );
     const model = modelRow[0]?.model || null;
 
+    // session_first_response_ms: 首条 assistant 输出时间 − session 开始时间
+    const firstRespRow = await this._dbQuery(
+      `SELECT MIN(p.time_created) as first_resp FROM part p LEFT JOIN message m ON p.message_id = m.id WHERE p.session_id = '${esc(sessionId)}' AND json_extract(m.data,'$.role') = 'assistant' AND json_extract(p.data,'$.type') IN ('text','reasoning','step-finish')`
+    );
+    const firstResponseEpoch = firstRespRow[0]?.first_resp ?? null;
+
+    const failures = await this.extractFailures(sessionId);
+
     return [
       makeMetricResult("llm_attempt_ttft_ms", ttftMs, {
         unit: "ms", scope: "session", scope_id: sessionId,
@@ -442,6 +489,7 @@ export class TeleAgentAdapter extends BaseAdapter {
         evidence_grade: ttftMs != null ? "derived" : "unknown",
         semantic_profile: "mean_step_ttft",
       }),
+      computeSessionFirstResponseMs(sr.time_created ?? null, firstResponseEpoch, sessionId),
       turnE2e,
       lifespan,
       makeMetricResult("token_input", tokens.input || null, {
@@ -511,6 +559,7 @@ export class TeleAgentAdapter extends BaseAdapter {
       makeMetricResult("human_confirm_count", humanConfirms, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
     ];
   }
 

@@ -7,7 +7,9 @@ import {
   computeCacheHitRate,
   computeSessionTurnE2eAvg,
   computeSessionLifespanMs,
+  computeSessionFirstResponseMs,
   aggregateTokens,
+  makeErrorCountMetrics,
 } from "../lib/metrics.mjs";
 import {
   readAttempts,
@@ -359,6 +361,12 @@ export class OpencodeAdapter extends BaseAdapter {
     const lifespan = computeSessionLifespanMs(sr.time_created ?? null, sr.time_updated ?? null);
     lifespan.scope_id = sessionId;
 
+    // session_first_response_ms: first assistant message time_created − session time_created
+    const firstAssistantTs = msgRows.length > 0 ? (msgRows[0].time_created || null) : null;
+    const firstResponseMs = computeSessionFirstResponseMs(
+      sr.time_created ?? null, firstAssistantTs, sessionId
+    );
+
     // Part-type counts
     const partTypeRows = await this._query(
       `SELECT json_extract(data, '$.type') as type, COUNT(*) as cnt FROM part WHERE session_id = '${esc(sessionId)}' GROUP BY type`
@@ -408,9 +416,12 @@ export class OpencodeAdapter extends BaseAdapter {
       humanConfirmCount = toolCalls.filter((c) => askTools.has(c.tool_name)).length;
     }
 
+    const failures = await this.extractFailures(sessionId);
+
     return [
       turnE2e,
       lifespan,
+      firstResponseMs,
       // TTFT：优先用采集器数据（collector-attempt-0.1.0），无则回退 not_instrumented。
       collectorActive
         ? computeTtftFromAttempts(collectorAttempts, sessionId)
@@ -457,6 +468,7 @@ export class OpencodeAdapter extends BaseAdapter {
         missing_reason: humanConfirmCount != null ? null : "not_instrumented",
         semantic_profile: "inferred_from_permission_ask_or_defaults_x_tool_parts",
       }),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
     ];
   }
 }

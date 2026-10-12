@@ -163,6 +163,58 @@ body {
   color: var(--text-muted);
 }
 
+/* Excerpt panel */
+.excerpt-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  box-shadow: var(--card-shadow);
+}
+.excerpt-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.excerpt-title .sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.excerpt-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  align-items: flex-start;
+}
+.excerpt-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding-top: 2px;
+  min-width: 70px;
+}
+.excerpt-content {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  flex: 1;
+  word-break: break-word;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.excerpt-content.user {
+  background: rgba(99,102,241,.08);
+  border-left: 3px solid #6366f1;
+}
+.excerpt-content.assistant {
+  background: rgba(34,197,94,.08);
+  border-left: 3px solid #22c55e;
+}
+
 /* Cards */
 .cards {
   display: grid;
@@ -608,18 +660,19 @@ async function selectSession(agent, sessionId) {
   const main = document.getElementById('main');
   main.innerHTML = '<div class="loading">Loading session details...</div>';
   try {
-    const [metricsRes, callsRes, eventsRes, failuresRes, usageRes] = await Promise.all([
+    const [metricsRes, callsRes, eventsRes, failuresRes, usageRes, excerptRes] = await Promise.all([
       fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/metrics`).then(r => r.json()).catch(() => ({items:[]})),
       fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/calls`).then(r => r.json()).catch(() => ({llm_calls:[],tool_calls:[]})),
       fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/events`).then(r => r.json()).catch(() => ({items:[]})),
       fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/failures`).then(r => r.json()).catch(() => ({diagnostics:[],summary:{}})),
       fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/usage`).then(r => r.json()).catch(() => ({items:[]})),
+      fetch(`/api/sessions/${agent}/default/${encodeURIComponent(sessionId)}/excerpt`).then(r => r.json()).catch(() => ({})),
     ]);
-    renderDetail(agent, sessionId, metricsRes.items || [], callsRes, eventsRes.items || [], failuresRes, usageRes.items || []);
+    renderDetail(agent, sessionId, metricsRes.items || [], callsRes, eventsRes.items || [], failuresRes, usageRes.items || [], excerptRes);
   } catch(e) { main.innerHTML = `<div class="empty">Error: ${e.message}</div>`; }
 }
 
-function renderDetail(agent, sessionId, metrics, calls, events, failures, usage) {
+function renderDetail(agent, sessionId, metrics, calls, events, failures, usage, excerpt) {
   const main = document.getElementById('main');
   const m = metricMap(metrics);
   const llmCalls = calls.llm_calls || [];
@@ -638,14 +691,39 @@ function renderDetail(agent, sessionId, metrics, calls, events, failures, usage)
   cards += card('Lifespan', fmtDur(m.session_lifespan_ms), '');
   cards += card('Credits', m.credits != null ? m.credits.toFixed(2) : null, 'credits');
   cards += card('TTFT', fmtDur(m.llm_attempt_ttft_ms), '');
+  cards += card('首响应延迟', fmtDur(m.session_first_response_ms), '', m.session_first_response_ms != null ? 'warning' : '');
   cards += card('Human Confirm', m.human_confirm_count, '', m.human_confirm_count > 0 ? 'warning' : '');
   cards += card('Success Rate', m.success_rate != null ? (m.success_rate*100).toFixed(0)+'%' : null, '', m.success_rate >= 0.95 ? 'success' : 'error');
+  cards += card('LLM Errors', m.llm_error_count, '', m.llm_error_count > 0 ? 'error' : 'success');
+  cards += card('Tool Errors', m.tool_error_count, '', m.tool_error_count > 0 ? 'error' : 'success');
+  cards += card('Dep. Errors', m.dependency_error_count, '', m.dependency_error_count > 0 ? 'error' : '');
+  cards += card('Agent Errors', m.agent_error_count, '', m.agent_error_count > 0 ? 'error' : '');
   cards += card('Failures', totalFailures || null, '', totalFailures > 0 ? 'error' : 'success');
   cards += '</div>';
 
+  let excerptHtml = renderExcerpt(excerpt);
   let failHtml = renderFailures(failures);
   let table = renderTraceTable(agent, events, llmCalls, toolCalls, usage);
-  main.innerHTML = `<div class="section-title">${agent} <span class="sub">${(sessionId||'').substring(0,32)}</span></div>${cards}${failHtml}${table}`;
+  main.innerHTML = `<div class="section-title">${agent} <span class="sub">${(sessionId||'').substring(0,32)}</span></div>${cards}${excerptHtml}${failHtml}${table}`;
+}
+
+function renderExcerpt(excerpt) {
+  if (!excerpt || excerpt.error) return '';
+  const user = excerpt.first_user_message;
+  const assistant = excerpt.last_assistant_message;
+  const model = excerpt.last_assistant_model;
+  if (!user && !assistant) return '';
+  const esc = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let html = '<div class="excerpt-panel">';
+  html += '<div class="excerpt-title">对话摘要 <span class="sub">（实时读取，不落盘）</span></div>';
+  if (user) {
+    html += `<div class="excerpt-row"><span class="excerpt-label">提示词</span><div class="excerpt-content user">${esc(user)}</div></div>`;
+  }
+  if (assistant) {
+    html += `<div class="excerpt-row"><span class="excerpt-label">模型返回${model ? ' ('+esc(model)+')' : ''}</span><div class="excerpt-content assistant">${esc(assistant)}</div></div>`;
+  }
+  html += '</div>';
+  return html;
 }
 
 function card(key, value, unit, colorClass) {
@@ -1447,6 +1525,7 @@ function renderCompare() {
     { key: 'turn_e2e_ms', label: 'Turn E2E (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: '单轮执行 E2E 时延：用户提交到本轮执行结束（含工具/关联子代理），不含等待用户下轮输入。Session 级取各轮均值。' },
     { key: 'session_lifespan_ms', label: 'Session Lifespan (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: 'Session 墙钟跨度：首事件到末事件的时间差，含用户空闲等待。不等于任务执行耗时。' },
     { key: 'llm_attempt_ttft_ms', label: 'TTFT (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: '首 Token 时延（TTFT）：LLM 请求开始到首模型输出的时间。仅含首模型输出，非首文本。' },
+    { key: 'session_first_response_ms', label: '首响应延迟 (avg)', agg: 'avg', fmt: fmtDur, unit: 'ms', desc: 'Session 首响应延迟：session 开始到首条 LLM 响应事件的墙钟间隔。包含请求排队、上下文编码等额外时间，evidence_grade=estimated。用于无 TTFT 数据时跨 Agent 对比。' },
     { key: 'token_input', label: 'Input Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '输入 Token 均值。口径因 Agent 而异：WorkBuddy 含 cache，TeleAgent/DSH 不含 cache。跨 Agent 对比需注意 input_includes_cache。' },
     { key: 'token_output', label: 'Output Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '输出 Token 均值（completion tokens）。' },
     { key: 'token_cache_read', label: 'Cache Hit Tokens (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '缓存命中 Token 均值（prompt_cache_hit / cache_read）。' },
@@ -1464,10 +1543,14 @@ function renderCompare() {
     { key: 'compaction_count', label: 'Compactions (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '上下文压缩触发次数。Mobilework 有 compaction 事件；TeleAgent 有 compaction part；Codex 有 contextCompaction items；其他 nc。' },
     { key: 'compaction_threshold', label: 'Compact Threshold (avg)', agg: 'avg', fmt: v => v != null ? Math.round(v) : null, unit: 'tok', desc: '上下文压缩阈值（触发自动压缩的 token 上限）。仅 Codex 从 config.toml model_auto_compact_token_limit 提取。' },
     { key: 'event_count_agent_input', label: 'Agent Inputs (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '用户输入事件数（agent.input）。近似轮次数。' },
-    { key: 'failures_tool', label: 'Tool Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：工具执行错误（exitCode≠0/status≠completed）。' },
-    { key: 'failures_model', label: 'Model Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：模型返回错误（非网关的 LLM 响应异常）。' },
-    { key: 'failures_dependency', label: 'Dependency Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：依赖错误（sidecar/daemon/IPC/ENOENT/DB）。' },
-    { key: 'failures_agent', label: 'Agent Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因：Agent 错误（cancelled/streaming/agent 内部异常）。' },
+    { key: 'llm_error_count', label: 'LLM Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'LLM 调用错误数（call-level: status=error）。来自 extractCalls 的 LLM 调用统计。' },
+    { key: 'tool_error_count', label: 'Tool Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '工具调用错误数（call-level: status=error）。来自 extractCalls 的工具调用统计。' },
+    { key: 'dependency_error_count', label: 'Dependency Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '依赖错误数（sidecar/daemon/IPC/ENOENT/DB）。来自 extractFailures 的 pattern-level 归因。' },
+    { key: 'agent_error_count', label: 'Agent Errors (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'Agent 错误数（cancelled/streaming/agent 内部异常）。来自 extractFailures 的 pattern-level 归因。' },
+    { key: 'failures_tool', label: 'Tool Failures (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因（pattern-level）：工具执行错误（exitCode≠0/status≠completed）。与 tool_error_count 不同——后者是 call-level，前者是 pattern-level。' },
+    { key: 'failures_model', label: 'Model Failures (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因（pattern-level）：模型返回错误（非网关的 LLM 响应异常）。' },
+    { key: 'failures_dependency', label: 'Dependency Failures (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因（pattern-level）：依赖错误（sidecar/daemon/IPC/ENOENT/DB）。与 dependency_error_count 同源。' },
+    { key: 'failures_agent', label: 'Agent Failures (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '失败归因（pattern-level）：Agent 错误（cancelled/streaming/agent 内部异常）。与 agent_error_count 同源。' },
   ];
 
   let html = '<div class="section-title">Cross-Agent Comparison <span class="sub">up to 20 sessions per agent · <span style="color:var(--text-muted)">gray = not-captured</span></span></div>';
