@@ -1,0 +1,2 @@
+{"role":"assistant","tool_calls":[{"id":"shared-id","function":{"name":"PowerShell","arguments":{}}}]}
+{"role":"tool","tool_call_id":"shared-id","exit_code":2,"content":"Synthetic explicit failure"}

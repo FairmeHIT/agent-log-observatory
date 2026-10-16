@@ -1,7 +1,9 @@
-# Doubao CDP Collector
+# Doubao CDP Collector 0.3.0
 
-Implementation lives in this directory; no extra npm packages or user-directory plugin copies required. Uses Node.js 24.x; requires the client to be started with loopback-only CDP enabled.
+Optional Node.js 24.x observer using built-in HTTP/WebSocket. No extra packages or client plugins. Enable the client's loopback CDP manually; the collector observes existing traffic and never sends prompts or changes the DOM.
 
-Install, usage, collection file verification, and rollback: see project `docs/deployment.md` §4.
+Output: project `runtime/collectors/doubao/events-YYYYMMDD.jsonl` and `health.json`; exclusive lock: `runtime/doubao-cdp-collector.lock`. Records contain allowlisted identifiers, statuses, character counts and observation times; no request/response bodies, tool arguments or credentials. Old attempts are preserved but do not supply internal TTFT/retry.
 
-Default output: `runtime/collectors/doubao/attempts-YYYYMMDD.jsonl`; locks/diagnostics also under project `runtime/`. Without a first-chunk event, TTFT falls back to derived response time; missing usage/model fields are never inferred.
+Streaming uses protocol-probed `Network.streamResourceContent` and `Network.dataReceived.data`. Buffered historical text has no invented arrival time. Client headers/first-text/reply timing is separate from internal LLM TTFT; usage remains missing. Session binding requires an explicit trajectory ID or verified unique mapping.
+
+[Install, verify and rollback](../../docs/deployment.md#4-doubao-cdp无额外插件) · [Metrics, schema, limits and validation](../../docs/doubao-observation-v0.3.md).

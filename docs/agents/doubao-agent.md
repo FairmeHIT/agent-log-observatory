@@ -1,7 +1,7 @@
 # Doubao（豆包 Work）数据源明细
 
 > 本文件从 [SPEC.md](../../SPEC.md) §2.5 拆分，自包含 Doubao（豆包 Work）的数据源探测明细：安装目录、数据目录、数据源表、事件格式、字段语义、指标可用性与限制。  
-> 所属项目：Agent Log Observatory · 能力归属：`Observation & Evidence Layer` · 状态：`draft`  
+> 所属项目：Agent Log Observatory · 能力归属：`Observation & Evidence Layer` · 状态：`0.3 observation contract`
 > 跨 Agent 指标覆盖矩阵见 [SPEC.md §3](../../SPEC.md#3-指标覆盖矩阵)。
 
 ---
@@ -27,7 +27,7 @@
 
 **路径模式**：`.doubao/agent_mode/workspace/.sessions/<session_id>/agents/<agent_id>/system/trajectory.jsonl`
 
-NDJSON 格式，每行一条消息，类似 OpenAI Chat Completions 消息结构。当前发现 7 个会话，最大文件 180KB。
+NDJSON 格式，每行一条消息，类似 OpenAI Chat Completions 消息结构。字段说明源于历史探测；会话数量/大小属于本机快照，不作为部署前提。
 
 | role | 含义 | 关键字段 | 映射 |
 |---|---|---|---|
@@ -51,12 +51,12 @@ NDJSON 格式，每行一条消息，类似 OpenAI Chat Completions 消息结构
 
 | 指标 | 提取方式 |
 |---|---|
-| **助手消息数** | role=assistant 去重计数，无调用 ID 不替代 LLM 调用数 |
-| **工具调用次数** | `role=assistant` 中所有 `tool_calls` 数组的元素总数 |
+| **助手消息数** | 有效 role=assistant 源行计数，无调用 ID 不替代 LLM 调用数 |
+| **工具调用次数** | 会话 + Agent + call ID 去重；每条消息全部工具展平，同名工具不同调用不合并 |
 | **工具成功率** | 明确结构化终态/exit_code 且唯一 call 关联；正文不含 error 不是成功证据 |
 | **Event: agent.input** | `role=user` 行数 |
 | **Event: llm.response** | `role=assistant` 行数 |
-| **Event: tool.call** | `role=assistant` 中 `tool_calls` 总数 |
+| **Event: tool.call** | 去重后的全部工具调用事件 |
 | **Event: tool.result** | `role=tool` 行数 |
 | **Step 总数** | 无原生循环边界则 null；assistant→tool 仅为消息模式，RPA business_step 独立 |
 | **人工确认次数** | 显式审批/用户决定证据；普通 user 回复不推断，默认 not-captured |
@@ -121,5 +121,9 @@ NDJSON 格式，每行一条消息，类似 OpenAI Chat Completions 消息结构
 **整体限制**：
 - LLM trajectory 有工具调用结构但无 Token、无模型名、无时间戳。
 - RPA trace 有精确时间戳和延迟但属于 DOM 操作层，非 LLM 推理层。
-- 两层轨迹需通过 session_id + agent_id 交叉关联才能还原完整链路。
+- 两层仅明确 session ID 或私有目录所有权关联；全局日志不分摊到会话，不保证完整内部链路。
 - 无 SQLite 数据库统一存储。
+
+## 0.3 新增采集与指标
+
+工具唯一调用/返回、孤立/未返回/重复、结构化终态覆盖率、新鲜度、CDP 客户端流与明确审批、RPA/Bridge installation scope 已实现。Token、内部 TTFT/重试/Step 与未带时间的轨迹 E2E 仍缺失。采集 schema、公式、限制、明确绑定及验证见 [0.3 契约](../doubao-observation-v0.3.md)。

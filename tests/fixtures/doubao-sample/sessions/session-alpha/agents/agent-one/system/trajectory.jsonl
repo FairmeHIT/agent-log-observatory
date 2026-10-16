@@ -1,0 +1,7 @@
+{"role":"user","content":"Synthetic fixture prompt"}
+{"role":"assistant","content":"Synthetic response with tools","tool_calls":[{"id":"shared-id","function":{"name":"PowerShell","arguments":{"command":"SYNTHETIC_PRIVATE_ARGUMENT"}}},{"id":"pending-id","function":{"name":"PowerShell","arguments":{}}}]}
+{"role":"tool","tool_call_id":"shared-id","exit_code":0,"content":"The word error here is quoted documentation, not a failure"}
+{"role":"tool","tool_call_id":"shared-id","exit_code":0,"content":"Duplicate terminal record"}
+{"role":"assistant","tool_calls":[{"id":"pending-id","function":{"name":"PowerShell","arguments":{}}}]}
+{"role":"tool","tool_call_id":"orphan-id","content":"Synthetic orphan result"}
+{"role":"user","content":"是"}
