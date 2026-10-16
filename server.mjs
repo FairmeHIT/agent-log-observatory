@@ -6,6 +6,10 @@ import { config, resolveAgentConfig, saveDbSettings } from "./lib/config.mjs";
 import { redact, whitelistFilter } from "./lib/redactor.mjs";
 import { beijingIso } from "./lib/time.mjs";
 import { percentile } from "./lib/metrics.mjs";
+import { aggregateForCompare as aggregateMetrics } from "./lib/compare-metrics.mjs";
+import { readSessionSnapshot } from "./lib/session-snapshot.mjs";
+import { prepareChartData, aggregateToolUsage } from "./lib/chart-data.mjs";
+import { readSessionMetrics } from "./lib/session-metrics-read.mjs";
 import { runPowerShell, stripBom } from "./lib/powershell.mjs";
 import { hasCollectorData } from "./lib/collector-reader.mjs";
 import fs from "node:fs/promises";
@@ -71,38 +75,7 @@ const COMPARE_METRICS = [
   "failures_dependency", "failures_agent",
 ];
 
-function aggregateForCompare(sessionMetrics) {
-  const result = {
-    session_count: sessionMetrics.length,
-    metrics: {},
-  };
-  for (const metricName of COMPARE_METRICS) {
-    const values = [];
-    let captured = 0, notCaptured = 0;
-    for (const sm of sessionMetrics) {
-      const m = sm.metrics[metricName];
-      if (m && m.state === "captured" && m.value != null) {
-        values.push(m.value);
-        captured++;
-      } else {
-        notCaptured++;
-      }
-    }
-    const sum = values.reduce((s, v) => s + v, 0);
-    const avg = values.length > 0 ? sum / values.length : null;
-    const p50 = percentile(values, 50);
-    const p95 = percentile(values, 95);
-    result.metrics[metricName] = {
-      captured, not_captured: notCaptured,
-      sum: values.length > 0 ? sum : null,
-      avg: avg != null ? Math.round(avg * 1000) / 1000 : null,
-      p50: p50.value, p95: p95.value,
-      p50_comparable: p50.comparable, p95_comparable: p95.comparable,
-      unit: sessionMetrics[0]?.metrics[metricName]?.unit || null,
-    };
-  }
-  return result;
-}
+function aggregateForCompare(sessions) { return aggregateMetrics(sessions, COMPARE_METRICS); }
 
 const AGENT_RESOURCE_DIRS = {
   workbuddy: [config.agents.workbuddy.dataDir],
@@ -356,22 +329,17 @@ async function syncAgentData(agentName, adapter) {
       // Write session metadata
       upsertSession(agentName, s);
       // Extract metrics for new sessions OR known sessions missing/revisit metrics
-      const needsMetrics = !knownIds.has(sid) || !hasSessionMetrics(agentName, sid)
+      const needsMetrics = agentName === "doubao" || !knownIds.has(sid) || !hasSessionMetrics(agentName, sid)
         || hasNotCapturedRefreshable(agentName, sid);
       if (needsMetrics) {
         try {
-          // extractMetrics already calls extractFailures internally via makeErrorCountMetrics,
-          // so we don't call extractFailures separately here to avoid double I/O.
-          const [metrics, events, usage, timeline] = await Promise.all([
-            adapter.extractMetrics(sid),
-            adapter.extractEvents ? adapter.extractEvents(sid) : Promise.resolve([]),
-            adapter.extractUsage ? adapter.extractUsage(sid) : Promise.resolve([]),
-            adapter.extractTimeline ? adapter.extractTimeline(sid) : Promise.resolve([]),
-          ]);
+          const snapshot = await readSessionSnapshot(adapter, sid);
+          const { metrics, events, usage, timeline } = snapshot;
+          if (snapshot.capture.sections.metrics !== 'read') continue;
           upsertMetrics(agentName, sid, metrics);
-          try { if (events?.length) upsertEvents(agentName, sid, events); } catch {}
-          try { if (usage?.length) upsertUsage(agentName, sid, usage); } catch {}
-          try { if (timeline?.length) upsertTimeline(agentName, sid, timeline); } catch {}
+          try { if (events?.length || agentName === "doubao") upsertEvents(agentName, sid, events || []); } catch {}
+          try { if (usage?.length || agentName === "doubao") upsertUsage(agentName, sid, usage || []); } catch {}
+          try { if (timeline?.length || agentName === "doubao") upsertTimeline(agentName, sid, timeline || []); } catch {}
           newCount++;
         } catch {}
       }
@@ -810,7 +778,7 @@ async function handleApi(req, res, url) {
         agent: agent && adapters[agent] ? agent : null,
         limit: agent ? 100 : 50,
         since: timeFilter.since || 0,
-        until: timeFilter.until || Date.now(),
+        until: timeFilter.until || 0,
       });
       if (items.length > 0) {
         if (agent && adapters[agent]) return jsonFiltered(res, { items, source: "db" });
@@ -842,7 +810,7 @@ async function handleApi(req, res, url) {
       const fromDB = getDBSessionItem(agent, sessionId);
       if (fromDB) return jsonFiltered(res, { ...fromDB, source: "db" });
     } catch {}
-    const sessions = await adapter.extractSessions({ limit: 500 });
+    const sessions = await adapter.extractSessions({ session_id:sessionId,limit: 500 });
     const found = sessions.items.find((s) => s.session_id === sessionId);
     if (!found) return jsonFiltered(res, { error: "not_found" }, 404);
     return jsonFiltered(res, { ...found, source: "live" });
@@ -873,7 +841,7 @@ async function handleApi(req, res, url) {
     if (!adapter.extractExcerpt) return json(res, { error: "not_supported" }, 404);
     try {
       const excerpt = await adapter.extractExcerpt(sessionId);
-      return json(res, redact(excerpt));
+      return jsonFiltered(res, excerpt);
     } catch (e) {
       return json(res, { error: e.message });
     }
@@ -901,21 +869,20 @@ async function handleApi(req, res, url) {
     const adapter = adapters[agent];
     if (!adapter) return json(res, { error: "unknown_agent" }, 404);
     if (!adapter.extractCalls) return json(res, { llm_calls: [], tool_calls: [] });
-    return json(res, await adapter.extractCalls(sessionId));
+    return jsonFiltered(res, await adapter.extractCalls(sessionId));
   }
 
+  if (p === "/api/agents/doubao/default/infrastructure") {
+    return jsonFiltered(res, await adapters.doubao.extractInfrastructure());
+  }
   const metricsMatch = p.match(/^\/api\/sessions\/(\w+)\/default\/([^/]+)\/metrics$/);
   if (metricsMatch) {
     const [, agent, sessionId] = metricsMatch;
     const adapter = adapters[agent];
     if (!adapter) return json(res, { error: "unknown_agent" }, 404);
-    // DB fast path
-    try {
-      const fromDB = getDBSessionMetrics(agent, sessionId);
-      if (fromDB && fromDB.length > 0) return json(res, { items: fromDB, source: "db" });
-    } catch {}
-    if (!adapter.extractMetrics) return json(res, { items: [] });
-    return json(res, { items: await adapter.extractMetrics(sessionId), source: "live" });
+    const fresh=url.searchParams.get('fresh');
+    if(fresh!==null&&!['0','1'].includes(fresh))return json(res,{error:'invalid_fresh'},400);
+    return jsonFiltered(res,await readSessionMetrics(adapter,sessionId,{fresh:fresh==='1',readCache:sid=>getDBSessionMetrics(agent,sid)}));
   }
 
   const failuresMatch = p.match(/^\/api\/sessions\/(\w+)\/default\/([^/]+)\/failures$/);
@@ -924,7 +891,7 @@ async function handleApi(req, res, url) {
     const adapter = adapters[agent];
     if (!adapter) return json(res, { error: "unknown_agent" }, 404);
     if (!adapter.extractFailures) return json(res, { diagnostics: [], summary: { gateway:0,tool:0,model:0,dependency:0,agent:0 } });
-    return json(res, await adapter.extractFailures(sessionId));
+    return jsonFiltered(res, await adapter.extractFailures(sessionId));
   }
 
   if (p === "/api/metrics/compare") {
@@ -952,10 +919,11 @@ async function handleApi(req, res, url) {
             const sessionMetrics = [];
             for (const s of dbSessions) {
               const rows = d.prepare(
-                "SELECT metric_name as metric, value, state, missing_reason, unit FROM session_metrics WHERE agent = ? AND session_id = ?"
+                "SELECT metric_json FROM session_metrics WHERE agent = ? AND session_id = ?"
               ).all(name, s.session_id);
               const map = {};
-              for (const r of rows) {
+              for (const row of rows) {
+                const r = JSON.parse(row.metric_json);
                 if (!map[r.metric] || r.state === "captured") map[r.metric] = r;
               }
               sessionMetrics.push({ session_id: s.session_id, metrics: map });
@@ -969,20 +937,10 @@ async function handleApi(req, res, url) {
         const sessionMetrics = [];
         for (const s of sessions.items.slice(0, limit)) {
           try {
-            const [m, f] = await Promise.all([
-              adapter.extractMetrics(s.session_id),
-              adapter.extractFailures ? adapter.extractFailures(s.session_id) : Promise.resolve({ summary: {} }),
-            ]);
+            const snapshot = await readSessionSnapshot(adapter, s.session_id);
             const map = {};
-            for (const item of m) {
-              if (!map[item.metric] || item.state === "captured") map[item.metric] = item;
-            }
-            const fsum = f.summary || {};
-            const failuresNc = f.source_available === false;
-            for (const cat of ["gateway", "tool", "model", "dependency", "agent"]) {
-              map["failures_" + cat] = failuresNc
-                ? { value: null, state: "not-captured", missing_reason: "source_unavailable" }
-                : { value: fsum[cat] || 0, state: "captured" };
+            for (const item of snapshot.metrics) {
+              if (!map[item.metric] || item.state === 'captured') map[item.metric] = item;
             }
             sessionMetrics.push({ session_id: s.session_id, metrics: map });
           } catch {}
@@ -1127,15 +1085,70 @@ async function handleApi(req, res, url) {
     return json(res, { items: items || [], source: "live" });
   }
 
+  if (p === "/api/tool-usage") {
+    // Read-only per-agent tool usage aggregate (chart5b_tool_ecosystem semantics).
+    // Sessions come from the DB fast path when synced, else live adapter reads;
+    // the response marks truncation instead of pretending to be exhaustive.
+    const agentFilter = url.searchParams.get("agents");
+    const agentNames = agentFilter ? agentFilter.split(",").filter((n) => adapters[n]) : Object.keys(adapters);
+    const top = Math.min(Math.max(parseInt(url.searchParams.get("top") || "10", 10) || 10, 1), 50);
+    const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 500);
+    const timeFilter = parseTimeFilter(url);
+    const since = timeFilter.since || 0;
+    const until = timeFilter.until || Date.now();
+    const useDB = getDBStats().session_count > 0;
+    const result = {};
+    let source = "none";
+    for (const name of agentNames) {
+      const adapter = adapters[name];
+      try {
+        let sessions = [];
+        let sessionSource = "live";
+        if (useDB) {
+          try { sessions = getDBSessionItems({ agent: name, limit, since, until }); } catch {}
+        }
+        if (sessions.length === 0) {
+          const extracted = await adapter.extractSessions({ limit, ...timeFilter });
+          sessions = extracted.items || [];
+        } else {
+          sessionSource = "db";
+        }
+        if (sessionSource === "db") source = "db";
+        else if (source !== "db") source = "live";
+        if (typeof adapter.extractCalls !== "function") {
+          result[name] = { tool_usage: [], distinct_tool_count: 0, total_tool_calls: 0, sessions_considered: sessions.length,
+            possibly_truncated: sessions.length >= limit, missing_reason: "tool_calls_not_supported" };
+          continue;
+        }
+        const rows = [];
+        for (const s of sessions) {
+          const sid = s.session_id || s.id;
+          if (!sid) continue;
+          try { rows.push({ session_id: sid, detail: { calls: await adapter.extractCalls(sid) } }); } catch {}
+        }
+        const usage = aggregateToolUsage(rows);
+        result[name] = { tool_usage: usage.slice(0, top), tools_truncated: Math.max(0, usage.length - top),
+          distinct_tool_count: usage.length, total_tool_calls: usage.reduce((n, t) => n + t.total, 0),
+          sessions_considered: sessions.length, possibly_truncated: sessions.length >= limit };
+      } catch (e) {
+        result[name] = { tool_usage: [], error: e.message };
+      }
+    }
+    return json(res, { generated_at: beijingIso(), source, top, limit, agents: result, read_only: true,
+      semantics: { calls: "unique adapter records; same rule as chart5b_tool_ecosystem",
+        activity: "observed activity only; not execution completion or business success",
+        window: "bounded per-agent session window; possibly_truncated marks non-exhaustive counts" } });
+  }
+
   // ============================================================================
   // /api/export — 一键导出观测数据（含每 Agent 每 Session 的全部详细日志）
   // GET  /api/export?agents=...&since=...&until=...  → 按 Agent/时间批量导出
   // POST /api/export  body: { sessions: [{agent, session_id}, ...] } → 选择性导出
   // ============================================================================
-  if (p === "/api/export") {
+  if (p === "/api/export" || p === "/api/chart-data") {
     const now = Date.now();
-    const stamp = beijingIso().replace(/[-:T]/g, "").slice(0, 15);
-    const filename = `observatory-export-${stamp}.json`;
+    const stamp = beijingIso().replace(/[-:T]/g, "").slice(0, 14);
+    const filename = `${p === "/api/chart-data" ? "observatory-chart-data" : "observatory-export"}-${stamp}.json`;
     const exportData = { export_metadata: {}, summary: {}, agents: {} };
     const sessionsByAgent = {};
     let totalSessions = 0;
@@ -1145,96 +1158,12 @@ async function handleApi(req, res, url) {
 
     // Helper: build full detail for one session
     async function buildSessionDetail(adapter, name, sid) {
-      // metrics
-      let metrics = [];
-      try {
-        if (useDB) {
-          const fromDB = getDBSessionMetrics(name, sid);
-          if (fromDB && fromDB.length > 0) metrics = fromDB;
-        }
-        if (metrics.length === 0) metrics = await adapter.extractMetrics(sid);
-      } catch {}
-
-      // events
-      let events = [];
-      try {
-        if (useDB) {
-          const fromDB = getDBEvents(name, sid);
-          if (fromDB && fromDB.length > 0) events = fromDB;
-        }
-        if (events.length === 0) events = (await adapter.extractEvents?.(sid)) || [];
-      } catch {}
-
-      // usage
-      let usage = [];
-      try {
-        if (useDB) {
-          const fromDB = getDBUsage(name, sid);
-          if (fromDB && fromDB.length > 0) usage = fromDB;
-        }
-        if (usage.length === 0) usage = (await adapter.extractUsage?.(sid)) || [];
-      } catch {}
-
-      // calls (always live, no DB cache)
-      let calls = { llm_calls: [], tool_calls: [], trace_duration_ms: null };
-      try {
-        if (adapter.extractCalls) calls = await adapter.extractCalls(sid);
-      } catch {}
-
-      // failures (always live, no DB cache)
-      let failures = {
-        diagnostics: [],
-        summary: { gateway: 0, tool: 0, model: 0, dependency: 0, agent: 0 },
-        source_available: true,
-      };
-      try {
-        if (adapter.extractFailures) {
-          const f = await adapter.extractFailures(sid);
-          const fsum = f.summary || {};
-          const failuresNc = f.source_available === false;
-          failures = {
-            diagnostics: f.diagnostics || [],
-            summary: {
-              gateway: failuresNc ? null : (fsum.gateway || 0),
-              tool: failuresNc ? null : (fsum.tool || 0),
-              model: failuresNc ? null : (fsum.model || 0),
-              dependency: failuresNc ? null : (fsum.dependency || 0),
-              agent: failuresNc ? null : (fsum.agent || 0),
-            },
-            source_available: f.source_available !== false,
-          };
-        }
-      } catch {}
-
-      // timeline
-      let timeline = [];
-      try {
-        if (useDB) {
-          const fromDB = getDBTimeline(name, sid);
-          if (fromDB && fromDB.length > 0) timeline = fromDB;
-        }
-        if (timeline.length === 0) timeline = (await adapter.extractTimeline?.(sid)) || [];
-      } catch {}
-
-      // build metricMap for compare summary
+      const detail = await readSessionSnapshot(adapter, sid);
       const metricMap = {};
-      for (const m of metrics) {
-        if (!metricMap[m.metric] || m.state === "captured") {
-          metricMap[m.metric] = { value: m.value, state: m.state, unit: m.unit };
-        }
+      for (const m of detail.metrics) {
+        if (!metricMap[m.metric] || m.state === 'captured') metricMap[m.metric] = m;
       }
-      const fsum = failures.summary;
-      const failuresNc = !failures.source_available;
-      for (const cat of ["gateway", "tool", "model", "dependency", "agent"]) {
-        metricMap["failures_" + cat] = failuresNc
-          ? { value: null, state: "not-captured", missing_reason: "source_unavailable" }
-          : { value: fsum[cat] || 0, state: "captured" };
-      }
-
-      return {
-        detail: { session: null, metrics, events, usage, calls, failures, timeline },
-        metricMap,
-      };
+      return { detail, metricMap };
     }
 
     // Helper: get agent_info via discover
@@ -1328,9 +1257,13 @@ async function handleApi(req, res, url) {
           sessions_by_agent: sessionsByAgent,
         },
       };
+      exportData.export_metadata.schema_version = 'observatory-export-1.1';
+      exportData.export_metadata.capture_policy = 'live-bounded-read-window';
+      exportData.export_metadata.limits = {session_limit_per_agent:500,possibly_truncated_agents:Object.entries(sessionsByAgent).filter(([,count])=>count>=500).map(([agent])=>agent)};
+      exportData.chart_data = prepareChartData([{source_id:'local-export',data:exportData}]);
       exportData.summary = { generated_at: beijingIso(), agents: compareData };
 
-      const bodyOut = JSON.stringify(redact(exportData), null, 2);
+      const bodyOut = JSON.stringify(redact(p === "/api/chart-data" ? exportData.chart_data : exportData), null, 2);
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Disposition": `attachment; filename="${filename}"`,
@@ -1394,9 +1327,13 @@ async function handleApi(req, res, url) {
         sessions_by_agent: sessionsByAgent,
       },
     };
-    exportData.summary = { generated_at: beijingIso(), agents: compareData };
+    exportData.export_metadata.schema_version = 'observatory-export-1.1';
+      exportData.export_metadata.capture_policy = 'live-bounded-read-window';
+      exportData.export_metadata.limits = {session_limit_per_agent:500,possibly_truncated_agents:Object.entries(sessionsByAgent).filter(([,count])=>count>=500).map(([agent])=>agent)};
+      exportData.chart_data = prepareChartData([{source_id:'local-export',data:exportData}]);
+      exportData.summary = { generated_at: beijingIso(), agents: compareData };
 
-    const bodyOut = JSON.stringify(redact(exportData), null, 2);
+    const bodyOut = JSON.stringify(redact(p === "/api/chart-data" ? exportData.chart_data : exportData), null, 2);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}"`,

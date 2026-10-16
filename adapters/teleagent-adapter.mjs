@@ -1,3 +1,4 @@
+import {computeTokenMetrics} from '../lib/token-metrics.mjs';
 import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig, config as globalConfig } from "../lib/config.mjs";
 import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/normalizer.mjs";
@@ -6,7 +7,7 @@ import { parseGoLogLine } from "../lib/log-parser.mjs";
 import {
   computeSuccessRate, computeCacheHitRate, computeOutputTps, aggregateTokens,
   computeSessionLifespanMs, computeSessionTurnE2eAvg, computeSessionFirstResponseMs,
-  makeErrorCountMetrics,
+  makeErrorCountMetrics, computeCallRecordMetrics,
 } from "../lib/metrics.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -85,6 +86,7 @@ export class TeleAgentAdapter extends BaseAdapter {
     const dbPath = await this._findDb();
     if (dbPath) {
       let where = "1=1";
+      if(options.session_id){if(!/^[A-Za-z0-9_-]{1,128}$/.test(options.session_id))throw Error('invalid_session_id');where+=` AND id = '${options.session_id}'`;}
       if (options.since) where += ` AND time_created >= ${options.since}`;
       if (options.until) where += ` AND time_created <= ${options.until}`;
       const rows = await this._dbQuery(
@@ -301,8 +303,11 @@ export class TeleAgentAdapter extends BaseAdapter {
               json_extract(data, '$.type') as ptype,
               json_extract(data, '$.time.start') as t_start,
               json_extract(data, '$.time.end') as t_end,
-              json_extract(data, '$.name') as t_name,
-              json_extract(data, '$.id') as t_id
+              coalesce(json_extract(data, '$.tool'), json_extract(data, '$.name')) as t_name,
+              coalesce(json_extract(data, '$.callID'), json_extract(data, '$.id'), id) as t_id,
+              json_extract(data, '$.state.status') as t_status,
+              json_extract(data, '$.state.time.start') as tool_start,
+              json_extract(data, '$.state.time.end') as tool_end
        FROM part WHERE session_id = '${esc(sessionId)}' ORDER BY time_created ASC`
     );
     if (partRows.length > 0) {
@@ -324,7 +329,7 @@ export class TeleAgentAdapter extends BaseAdapter {
             // first_output_at 保持 null，TTFT 由 extractMetrics 判 not-captured/missing_first_chunk。
             first_output_at: null,
             generation_ended_at: null,
-            status: "ok",
+            status: "running",
           });
         }
         if (ptype === "reasoning" && r.t_end != null) {
@@ -337,15 +342,20 @@ export class TeleAgentAdapter extends BaseAdapter {
           const step = llmCalls[llmCalls.length - 1];
           if (step && step.generation_ended_at == null) step.generation_ended_at = r.time_created;
         }
+        if (ptype === "step-finish" && stepIdx >= 0) {
+          const step = llmCalls[llmCalls.length - 1];
+          step.generation_ended_at = r.time_created;
+          step.status = 'ok';
+        }
         if (ptype === "tool") {
           toolCalls.push({
             call_id: r.t_id || `ta_tool_${toolCalls.length}`,
             session_id: sessionId,
             agent_object: "teleagent",
             tool_name: r.t_name || null,
-            started_at: r.time_created,
-            ended_at: r.time_created,
-            status: "ok",
+            started_at: r.tool_start ?? null,
+            ended_at: r.tool_end ?? null,
+            status: r.t_status === 'completed' ? 'ok' : r.t_status === 'error' ? 'error' : 'unknown',
           });
         }
       }
@@ -419,8 +429,8 @@ export class TeleAgentAdapter extends BaseAdapter {
   }
 
   async extractMetrics(sessionId, options = {}) {
-    const usage = await this.extractUsage(sessionId);
-    const calls = await this.extractCalls(sessionId, options);
+    const usage = options.usage ?? await this.extractUsage(sessionId);
+    const calls = options.calls ?? await this.extractCalls(sessionId, options);
     const tokens = aggregateTokens(usage);
     const llmCalls = calls.llm_calls || [];
     const toolCalls = calls.tool_calls || [];
@@ -479,7 +489,7 @@ export class TeleAgentAdapter extends BaseAdapter {
     );
     const firstResponseEpoch = firstRespRow[0]?.first_resp ?? null;
 
-    const failures = await this.extractFailures(sessionId);
+    const failures = options.failures ?? await this.extractFailures(sessionId);
 
     return [
       makeMetricResult("llm_attempt_ttft_ms", ttftMs, {
@@ -492,29 +502,14 @@ export class TeleAgentAdapter extends BaseAdapter {
       computeSessionFirstResponseMs(sr.time_created ?? null, firstResponseEpoch, sessionId),
       turnE2e,
       lifespan,
-      makeMetricResult("token_input", tokens.input || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_output", tokens.output || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_cache_read", tokens.cache_read || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_reasoning", tokens.reasoning || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_total",
-        ((tokens.input || 0) + (tokens.output || 0) + (tokens.cache_read || 0)) || null,
-        { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "derived" }
-      ),
+      ...computeTokenMetrics(usage,sessionId),
       makeMetricResult("credits", tokens.monetary_cost || null, {
         unit: "USD", scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
       makeMetricResult("llm_call_count", llmCalls.length, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      computeSuccessRate(llmOk, llmError),
+      computeSuccessRate(llmOk, llmError, llmCalls.length),
       makeMetricResult("llm_retry_count", null, {
         scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
@@ -522,7 +517,7 @@ export class TeleAgentAdapter extends BaseAdapter {
       makeMetricResult("tool_call_count", toolCalls.length, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      computeSuccessRate(toolOk, toolError),
+      { ...computeSuccessRate(toolOk, toolError, toolCalls.length), metric: "tool_success_rate" },
       computeCacheHitRate(usage),
       computeOutputTps(tokens.output, generationMs),
       makeMetricResult("step_count", stepCount, {
@@ -543,9 +538,7 @@ export class TeleAgentAdapter extends BaseAdapter {
       makeMetricResult("event_count_tool_call", toolCalls.length, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      makeMetricResult("event_count_tool_result", toolCalls.length, {
-        scope: "session", scope_id: sessionId, evidence_grade: "derived",
-      }),
+      makeMetricResult("event_count_tool_result", null, {scope:'session',scope_id:sessionId,missing_reason:'semantic_unknown',semantic_profile:'calls_do_not_prove_result_events'}),
       makeMetricResult("max_context", usage.length > 0
         ? Math.max(...usage.map(r => (r.input || 0) + (r.cache_read || 0)))
         : null,
@@ -559,7 +552,8 @@ export class TeleAgentAdapter extends BaseAdapter {
       makeMetricResult("human_confirm_count", humanConfirms, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId, calls),
+      ...computeCallRecordMetrics(calls, sessionId),
     ];
   }
 

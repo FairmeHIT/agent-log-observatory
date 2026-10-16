@@ -76,3 +76,8 @@ describe("Whitelist Filter", () => {
     assert.equal(r.tokens.input, 34506);
   });
 });
+
+test('underscore fields and diagnostic message bodies cannot bypass the public allowlist',()=>{
+ const result=whitelistFilter(redact({items:[{_raw_prompt:'private-canary',message:'private-canary',raw_message:'private-canary',prompt:'private-canary',metric:'token_input',value:1}],_private_payload:'private-canary'}));
+ assert.ok(!JSON.stringify(result).includes('private-canary'));assert.equal(result.items[0].value,1);
+});

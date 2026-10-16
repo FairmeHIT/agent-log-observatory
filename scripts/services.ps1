@@ -31,7 +31,21 @@ function Invoke-Service([string]$name) {
     $owned = Get-OwnedProcess $record $entry.Script
   }
   if ($Action -eq 'stop') {
-    if ($owned) { Stop-Process -Id $owned.ProcessId -ErrorAction Stop; Write-Host "Stopped project service: $name" }
+    if ($owned) {
+      Stop-Process -Id $owned.ProcessId -ErrorAction Stop
+      # Windows termination does not reliably deliver Node SIGTERM. Release only
+      # the stopped collector's own lock, after confirming that PID is gone.
+      if ($name -eq 'doubao' -and !(Get-Process -Id $owned.ProcessId -ErrorAction SilentlyContinue)) {
+        $collectorLock = Join-Path $runtime 'doubao-cdp-collector.lock'
+        if (Test-Path -LiteralPath $collectorLock) {
+          try {
+            $lock = Get-Content -LiteralPath $collectorLock -Raw | ConvertFrom-Json
+            if ($lock.pid -eq $owned.ProcessId -and $lock.collector_version -eq '0.3.0') { Remove-Item -LiteralPath $collectorLock }
+          } catch { Write-Host 'Collector lock retained; inspect its owner before removing it manually.' }
+        }
+      }
+      Write-Host "Stopped project service: $name"
+    }
     else { Write-Host "No managed project process to stop: $name (other processes untouched)." }
     if (Test-Path -LiteralPath $recordFile) { Remove-Item -LiteralPath $recordFile }
     return
@@ -70,7 +84,7 @@ if ($Component -eq 'all') {
     try { Invoke-Service 'doubao' }
     catch { Write-Host "WARN doubao collector not started: $($_.Exception.Message)" }
   } else {
-    Write-Host "skip doubao collector: CDP port $cdpPort not listening (launch Doubao with --remote-debugging-port=$cdpPort to enable TTFT capture)."
+    Write-Host "skip doubao collector: CDP port $cdpPort not listening (launch Doubao with --remote-debugging-port=$cdpPort to enable client stream observation)."
   }
 } elseif ($Component -eq 'mobilework-stack') {
   if ($Action -eq 'start') {

@@ -1,10 +1,11 @@
+import {computeTokenMetrics} from '../lib/token-metrics.mjs';
 import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig } from "../lib/config.mjs";
 import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/normalizer.mjs";
 import { makeFieldEvidence, makeDataCompleteness, makeMetricResult, METRIC_DEFINITION_VERSION } from "../lib/evidence.mjs";
 import { parseElectronLogLine } from "../lib/log-parser.mjs";
 import { redact } from "../lib/redactor.mjs";
-import { computeSuccessRate, computeRetryRate, aggregateTokens, computeCacheHitRate, computeOutputTps, computeSessionTurnE2eAvg, computeSessionLifespanMs, computeSessionFirstResponseMs, makeErrorCountMetrics } from "../lib/metrics.mjs";
+import { computeSuccessRate, computeRetryRate, aggregateTokens, computeCacheHitRate, computeOutputTps, computeSessionTurnE2eAvg, computeSessionLifespanMs, computeSessionFirstResponseMs, makeErrorCountMetrics, computeCallRecordMetrics } from "../lib/metrics.mjs";
 import { computeTtftFromAttempts } from "../lib/collector-reader.mjs";
 import path from "node:path";
 import os from "node:os";
@@ -46,12 +47,10 @@ export class WorkBuddyAdapter extends BaseAdapter {
 
   async capabilities(context) {
     const tracesAvailable = await this._hasTraceGenerationSpans();
-    const missing = tracesAvailable
-      ? ["retry", "human_confirm"] // trace 补全了 ttft
-      : ["ttft", "retry", "human_confirm"];
+    const missing = ["ttft", "retry", "human_confirm"];
     return {
       has_tokens: true,
-      has_ttft: tracesAvailable,
+      has_ttft: false,
       has_retry: false,
       has_model_routing: true,
       has_event_stream: true,
@@ -60,17 +59,18 @@ export class WorkBuddyAdapter extends BaseAdapter {
       has_human_confirm: false,
       missing_fields: missing,
       trace_active: tracesAvailable,
-      trace_caveat: "TTFT derived from trace generation spans (startedAt→endedAt); non-streaming response so first_output≈response complete",
+      trace_caveat: "Generation span end records completion, not native first output; TTFT remains unavailable",
     };
   }
 
   async extractSessions(options = {}) {
+    if(options.session_id&&!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(options.session_id))throw Error('Invalid session identity');
     const sessionsDir = path.join(this._wbDataDir(), "sessions");
     const items = [];
     let skippedPrewarm = 0;
 
     // 预先从 transcript 的 ai-title 行构建 sessionId → title 映射
-    const titleMap = await this._buildTitleMap();
+    const titleMap = options.session_id?new Map():await this._buildTitleMap();
 
     try {
       const files = await fs.readdir(sessionsDir);
@@ -78,6 +78,7 @@ export class WorkBuddyAdapter extends BaseAdapter {
         try {
           const raw = JSON.parse(await fs.readFile(path.join(sessionsDir, file), "utf8"));
           const sid = raw.sessionId || "";
+          if(options.session_id&&sid!==options.session_id)continue;
           const kind = raw.kind || "";
           // 过滤预热池 session：sessionId 以 prewarm-wb-pool 开头，或 kind 非 interactive
           // 这些是 WorkBuddy 进程池预热会话，无真实用户任务，纳入会污染指标
@@ -100,6 +101,24 @@ export class WorkBuddyAdapter extends BaseAdapter {
         } catch {}
       }
     } catch {}
+
+    // Client cleanup removes sessions/*.json while native transcripts remain.
+    // Recover identity only from matching native sessionId records, never from
+    // a requested ID or filename alone. This also exposes archived sessions.
+    const known=new Set(items.map(s=>s.session_id)),projectsDir=path.join(this._wbDataDir(),'projects');
+    for await(const dir of readDirEntries(projectsDir)){
+      let files=[];try{files=options.session_id?[options.session_id+'.jsonl']:await fs.readdir(path.join(projectsDir,dir));}catch{continue;}
+      for(const file of files.filter(f=>/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.jsonl$/.test(f))){
+        const sid=file.slice(0,-6);if(known.has(sid)||sid.startsWith('prewarm-wb-pool'))continue;
+        try{
+          const records=(await fs.readFile(path.join(projectsDir,dir,file),'utf8')).split('\n').filter(Boolean).flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
+          if(records.some(r=>r.sessionId&&r.sessionId!==sid)||!records.some(r=>r.sessionId===sid&&(r.type==='session-meta'||r.type==='message')))continue;
+          const stamps=records.filter(r=>r.sessionId===sid&&Number.isFinite(r.timestamp)).map(r=>r.timestamp),started=stamps.length?stamps.reduce((a,b)=>Math.min(a,b),Infinity):null;
+          if(options.since&&started&&started<options.since||options.until&&started&&started>options.until)continue;
+          items.push(normalizeSession({agent_object:'workbuddy',session_id:sid,title:titleMap.get(sid)||null,started_at:started?beijingIso(started):null,model:null,agent_name:'workbuddy',source_status:'ok',data_completeness:makeDataCompleteness(MISSING)}));known.add(sid);
+        }catch{}
+      }
+    }
 
     return {
       items,
@@ -195,6 +214,7 @@ export class WorkBuddyAdapter extends BaseAdapter {
           const raw = obj?.providerData?.rawUsage;
           if (!raw) continue;
           records.push(normalizeUsageRecord({
+            session_id:sessionId,
             usage_record_id: obj.providerData?.messageId || `wb_${records.length}`,
             scope: "llm_call",
             scope_id: obj.providerData?.messageId || null,
@@ -356,6 +376,7 @@ export class WorkBuddyAdapter extends BaseAdapter {
           try {
             const raw = JSON.parse(await fs.readFile(path.join(traceDir, tf), "utf8"));
             const trace = raw.trace || {};
+            if (trace.sessionId !== sessionId) continue;
             const spans = raw.spans || [];
             const agentSpans = spans.filter((s) => s.type === "agent");
             for (const s of agentSpans) {
@@ -374,8 +395,8 @@ export class WorkBuddyAdapter extends BaseAdapter {
   }
 
   async extractMetrics(sessionId, options = {}) {
-    const usage = await this.extractUsage(sessionId);
-    const calls = await this.extractCalls(sessionId, options);
+    const usage = options.usage ?? await this.extractUsage(sessionId);
+    const calls = options.calls ?? await this.extractCalls(sessionId, options);
     const tokens = aggregateTokens(usage);
 
     // trace generation spans → attempt 对象 → computeTtftFromAttempts
@@ -426,35 +447,20 @@ export class WorkBuddyAdapter extends BaseAdapter {
       .filter((c) => c.requested_at && c.generation_ended_at)
       .reduce((s, c) => s + (c.generation_ended_at - c.requested_at), 0);
 
-    const failures = await this.extractFailures(sessionId);
+    const failures = options.failures ?? await this.extractFailures(sessionId);
 
     return [
       turnE2e,
       lifespan,
       computeSessionFirstResponseMs(transcriptRange.first ?? null, firstResponseEpoch, sessionId),
-      makeMetricResult("token_input", tokens.input || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_output", tokens.output || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_cache_read", tokens.cache_read || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_reasoning", tokens.reasoning || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-      }),
-      makeMetricResult("token_total", (tokens.input || 0) + (tokens.output || 0) || null, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "derived",
-        semantic_profile: "input_plus_output",
-      }),
+      ...computeTokenMetrics(usage,sessionId),
       makeMetricResult("credits", tokens.credits || null, {
         unit: "credits", scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
       countMetric("llm_call_count", llmCalls.length),
-      computeSuccessRate(llmOk, llmError),
+      computeSuccessRate(llmOk, llmError, llmCalls.length),
       countMetric("tool_call_count", toolCalls.length),
-      computeSuccessRate(toolOk, toolError),
+      { ...computeSuccessRate(toolOk, toolError, toolCalls.length), metric: "tool_success_rate" },
       computeCacheHitRate(usage),
       computeOutputTps(tokens.output, generationMs),
       countMetric("step_count", reasoningCount + funcCallCount + funcResultCount, {
@@ -489,7 +495,8 @@ export class WorkBuddyAdapter extends BaseAdapter {
         unit: "tokens", scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
       }),
-      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId, calls),
+      ...computeCallRecordMetrics(calls, sessionId),
     ];
   }
 
@@ -705,8 +712,8 @@ export class WorkBuddyAdapter extends BaseAdapter {
         is_retry: false,
         retry_of: null,
         requested_at: requestedAt,
-        first_output_at: firstOutputAt,
-        // 非流式：response complete = first output（标 derived）
+        first_output_at: null,
+        // Generation span end is completion, not an observed first output.
         first_output_source: "derived",
         stream_ended_at: firstOutputAt,
         timestamp_basis: "epoch_ms",

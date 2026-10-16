@@ -23,7 +23,23 @@
     },
     "event_subtype": { "type": ["string", "null"] },
     "event_type_raw": { "type": ["string", "null"] },
-    "occurred_at": { "type": ["string", "null"] },
+    "occurred_at": { "type": ["number", "string", "null"] },
+    "received_at": { "type": ["number", "string", "null"] },
+    "source_seq": { "type": ["integer", "null"] },
+    "timestamp_basis": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "source_kind": { "type": ["string", "null"] },
+        "agent_id": { "type": ["string", "null"] },
+        "conversation_id": { "type": ["string", "null"] },
+        "request_id": { "type": ["string", "null"] },
+        "approval_id": { "type": ["string", "null"] },
+        "decision": { "type": ["string", "null"] },
+        "text_chars": { "type": ["integer", "null"] },
+        "rpa_run_id": { "type": ["string", "null"] }
+      }
+    },
     "status": { "type": "string", "enum": ["ok", "error", "running", "cancelled", "unknown"] },
     "requested_model": { "type": ["string", "null"] },
     "routed_model": { "type": ["string", "null"] },

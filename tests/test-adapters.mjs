@@ -95,7 +95,7 @@ describe("WorkBuddy Adapter", () => {
     assert.ok(foundCost, "at least one rawUsage entry must exist");
   });
 
-  test("trace generation spans produce captured TTFT", async () => {
+  test("generation completion spans never fabricate first-token timing", async () => {
     const a = new WorkBuddyAdapter();
     // 用 fixture dataDir 覆盖，指向 workbuddy-sample（含 traces/ 子目录）
     const fixtureDataDir = path.join(fixtureDir, "workbuddy-sample");
@@ -108,15 +108,15 @@ describe("WorkBuddy Adapter", () => {
       assert.equal(attempts.length, genSpans.length);
       // 验证 attempt 字段
       assert.ok(attempts[0].requested_at != null);
-      assert.ok(attempts[0].first_output_at != null);
+      assert.equal(attempts[0].first_output_at, null);
       assert.equal(attempts[0].first_output_source, "derived");
       assert.equal(attempts[0].timestamp_basis, "epoch_ms");
       // computeTtftFromAttempts 计算 TTFT 均值
       const ttft = computeTtftFromAttempts(attempts, "fixture-session-001");
-      assert.equal(ttft.state, "captured");
+      assert.equal(ttft.state, "not-captured");
       assert.equal(ttft.metric, "llm_attempt_ttft_ms");
       // 3 个 span：3000ms, 3500ms, 3000ms → 均值 3166ms
-      assert.equal(ttft.value, 3167);
+      assert.equal(ttft.value, null);
       assert.equal(ttft.coverage.eligible, 3);
       assert.equal(ttft.coverage.collisions, 0);
     } finally {
@@ -132,9 +132,9 @@ describe("WorkBuddy Adapter", () => {
     process.env.AGENT_LOG_WORKBUDDY_DATADIR = fixtureDataDir;
     try {
       const c = await a.capabilities();
-      assert.equal(c.has_ttft, true, "fixture traces should enable has_ttft");
+      assert.equal(c.has_ttft, false, "completion spans cannot enable TTFT");
       assert.equal(c.trace_active, true);
-      assert.ok(!c.missing_fields.includes("ttft"));
+      assert.ok(c.missing_fields.includes("ttft"));
     } finally {
       if (origDataDir) process.env.AGENT_LOG_WORKBUDDY_DATADIR = origDataDir;
       else delete process.env.AGENT_LOG_WORKBUDDY_DATADIR;
@@ -226,10 +226,10 @@ describe("Doubao Adapter", () => {
   test("capabilities returns correct fields", async () => {
     const a = new DoubaoAdapter();
     const c = await a.capabilities();
-    // Capabilities are dynamic: when collector data exists, has_tokens/has_ttft become true
+    // Client stream timing does not prove internal token usage or LLM TTFT.
     assert.equal(typeof c.has_tokens, "boolean");
     assert.equal(typeof c.has_ttft, "boolean");
-    assert.equal(c.has_human_confirm, true);
+    assert.equal(typeof c.has_human_confirm, "boolean");
     assert.equal(typeof c.collector_active, "boolean");
   });
 
@@ -256,7 +256,7 @@ describe("Doubao Adapter", () => {
     assert.ok(assistantCount >= 3);
     assert.ok(toolCount >= 3);
     assert.ok(toolCallsCount >= 3);
-    assert.ok(humanConfirms >= 1, "should detect at least 1 human confirm");
+    assert.ok(humanConfirms >= 1, "fixture includes plain user replies; these alone are not approval evidence");
   });
 });
 

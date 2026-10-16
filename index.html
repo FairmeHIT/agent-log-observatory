@@ -509,6 +509,7 @@ table.cmp tr:hover td { background: #f8fafc; }
   <button onclick="clearDateFilter()" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer">Clear</button>
   <button onclick="refreshCurrentTab()" id="refreshBtn" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px">&#x21bb; Refresh</button>
   <button onclick="exportData()" id="exportBtn" style="padding:4px 12px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.15);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px" title="导出全部观测数据为 JSON">&#x2B07; Export</button>
+  <button onclick="exportData(true)" title="导出图表数据：活动与真实成功分列，缺少独立验收时成功率为空">图表数据</button>
   <span id="envBadge" onclick="switchTab('envcheck')" style="cursor:pointer;font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);display:none" title="环境检查概览"></span>
   <span class="ver" id="ver"></span>
 </div>
@@ -682,6 +683,10 @@ function renderDetail(agent, sessionId, metrics, calls, events, failures, usage,
 
   let cards = '<div class="cards">';
   cards += card('LLM Calls', m.llm_call_count, '', m.llm_call_count > 0 ? 'accent' : '');
+  cards += card('LLM 观测记录', m.llm_record_count, '适配器记录粒度');
+  cards += card('LLM 未配对终态', m.llm_unresolved_record_count, '观测缺口');
+  cards += card('工具已知结果率', m.tool_observed_success_rate != null ? (m.tool_observed_success_rate*100).toFixed(1)+'%' : null, '已知成功/失败分母');
+  cards += card('工具终态覆盖', m.tool_terminal_coverage != null ? (m.tool_terminal_coverage*100).toFixed(1)+'%' : null, '包含取消');
   cards += card('Tool Calls', m.tool_call_count, '', m.tool_call_count > 0 ? 'accent' : '');
   cards += card('Steps', m.step_count, '', m.step_count > 0 ? 'accent' : '');
   cards += card('Input Tokens', fmtNum(m.token_input), 'tokens');
@@ -693,18 +698,47 @@ function renderDetail(agent, sessionId, metrics, calls, events, failures, usage,
   cards += card('TTFT', fmtDur(m.llm_attempt_ttft_ms), '');
   cards += card('首响应延迟', fmtDur(m.session_first_response_ms), '', m.session_first_response_ms != null ? 'warning' : '');
   cards += card('Human Confirm', m.human_confirm_count, '', m.human_confirm_count > 0 ? 'warning' : '');
-  cards += card('Success Rate', m.success_rate != null ? (m.success_rate*100).toFixed(0)+'%' : null, '', m.success_rate >= 0.95 ? 'success' : 'error');
+  cards += card('LLM 已知结果率', m.success_rate != null ? (m.success_rate*100).toFixed(0)+'%' : null, '', m.success_rate >= 0.95 ? 'success' : 'error');
   cards += card('LLM Errors', m.llm_error_count, '', m.llm_error_count > 0 ? 'error' : 'success');
   cards += card('Tool Errors', m.tool_error_count, '', m.tool_error_count > 0 ? 'error' : 'success');
   cards += card('Dep. Errors', m.dependency_error_count, '', m.dependency_error_count > 0 ? 'error' : '');
   cards += card('Agent Errors', m.agent_error_count, '', m.agent_error_count > 0 ? 'error' : '');
   cards += card('Failures', totalFailures || null, '', totalFailures > 0 ? 'error' : 'success');
+  if (agent === 'doubao') {
+    cards += card('助手消息', m.assistant_message_count, '');
+    cards += card('工具返回', m.tool_result_count, '');
+    cards += card('未见工具返回', m.tool_unresolved_count, '');
+    cards += card('孤立工具返回', m.tool_orphan_result_count, '');
+    cards += card('工具终态覆盖', m.tool_terminal_coverage != null ? (m.tool_terminal_coverage*100).toFixed(0)+'%' : null, '');
+    cards += card('工具成功率', m.tool_success_rate != null ? (m.tool_success_rate*100).toFixed(0)+'%' : null, '仅明确成功/失败');
+    cards += card('响应头延迟', fmtDur(m.client_headers_ms), '客户端');
+    cards += card('首文本延迟', fmtDur(m.client_first_text_ms), '客户端观测');
+    cards += card('回复结束耗时', fmtDur(m.client_reply_e2e_ms), '当前回复');
+    cards += card('流传输耗时', fmtDur(m.client_stream_ms), '');
+    cards += card('文本更新数', m.stream_chunk_count, '');
+    cards += card('流内最大停顿', fmtDur(m.stream_max_pause_ms), '');
+    cards += card('字符输出速率', m.stream_output_chars_per_second != null ? m.stream_output_chars_per_second.toFixed(1) : null, 'chars/s');
+    cards += card('人工请求', m.human_request_count, '');
+    cards += card('人工等待', fmtDur(m.human_wait_ms), '已配对决定');
+    cards += card('数据新鲜度', fmtDur(m.source_freshness_ms), '距文件最近写入');
+    cards += card('已绑定采集事件', m.collector_bound_event_count, '');
+    cards += card('未绑定采集事件', m.collector_unbound_event_count, '豆包全局');
+    cards += card('RPA 运行耗时', fmtDur(m.rpa_run_ms), '有明确会话绑定');
+  }
   cards += '</div>';
 
   let excerptHtml = renderExcerpt(excerpt);
   let failHtml = renderFailures(failures);
   let table = renderTraceTable(agent, events, llmCalls, toolCalls, usage);
-  main.innerHTML = `<div class="section-title">${agent} <span class="sub">${(sessionId||'').substring(0,32)}</span></div>${cards}${excerptHtml}${failHtml}${table}`;
+  const esc = value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  let evidence = '';
+  if (agent === 'doubao') {
+    evidence = '<p class="sub">工具返回存在不证明成功；客户端回复结束不证明工作任务完成。部分采集值只覆盖观测窗口，缺失指标显示 —。</p>';
+    evidence += '<div class="table-wrap"><table class="trace"><thead><tr><th>指标</th><th>状态</th><th>证据</th><th>覆盖</th><th>缺失原因</th></tr></thead><tbody>';
+    for (const item of metrics) evidence += `<tr><td>${esc(item.metric)}</td><td>${esc(item.state)}</td><td>${esc(item.evidence_grade)}</td><td>${esc(item.coverage?.observed ?? 0)} / ${esc(item.coverage?.eligible ?? 0)}</td><td>${esc(item.missing_reason || '—')}</td></tr>`;
+    evidence += '</tbody></table></div>';
+  }
+  main.innerHTML = `<div class="section-title">${agent} <span class="sub">${esc((sessionId||'').substring(0,32))}</span></div>${cards}${evidence}${excerptHtml}${failHtml}${table}`;
 }
 
 function renderExcerpt(excerpt) {
@@ -760,12 +794,16 @@ function renderFailures(failures) {
   if (diag.length) {
     html += '<div class="table-wrap"><table class="trace"><thead><tr><th>Category</th><th>Entity</th><th>Tool</th><th>Rule</th><th>Message</th><th>Evidence</th></tr></thead><tbody>';
     for (const d of diag.slice(0, 20)) {
-      html += `<tr class="error"><td><span class="failure-tag ${d.category}">${d.category}</span></td><td>${d.entity||'—'}</td><td>${d.tool_name||'—'}</td><td>${d.rule||'—'}</td><td style="font-size:11px;color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis">${(d.message||d.reason||'').substring(0,100)}</td><td>${d.evidence_grade||'—'}</td></tr>`;
+      html += `<tr class="error"><td><span class="failure-tag">${escapeHtml(d.category)}</span></td><td>${escapeHtml(d.entity||'—')}</td><td>${escapeHtml(d.tool_name||'—')}</td><td>${escapeHtml(d.rule||'—')}</td><td style="font-size:11px;color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml((d.message||d.reason||'').substring(0,100))}</td><td>${escapeHtml(d.evidence_grade||'—')}</td></tr>`;
     }
     html += '</tbody></table></div>';
   }
   html += '</div>';
   return html;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function renderTraceTable(agent, events, llmCalls, toolCalls, usage) {
@@ -775,7 +813,7 @@ function renderTraceTable(agent, events, llmCalls, toolCalls, usage) {
   let rows = buildTraceRows(agent, events, llmCalls, toolCalls, usage);
   if (!rows.length) return '<div class="empty">No trace rows could be constructed</div>';
 
-  let html = '<div class="table-wrap"><div class="table-header">Trace (' + rows.length + ' steps)</div><table class="trace"><thead><tr>';
+  let html = '<div class="table-wrap"><div class="table-header">Trace (' + rows.length + ' rows)</div><table class="trace"><thead><tr>';
   html += '<th style="width:40px">#</th><th style="width:70px">Time</th><th>Model</th><th>Action</th>';
   html += '<th class="num" style="width:110px">Input\\Cache</th><th class="num" style="width:80px">Output</th>';
   html += '<th class="num" style="width:70px">Duration</th><th class="num" style="width:70px">TTFT</th><th style="width:70px">Status</th>';
@@ -788,8 +826,8 @@ function renderTraceTable(agent, events, llmCalls, toolCalls, usage) {
     html += `<tr class="${cls}">`;
     html += `<td style="color:var(--text-muted)">${i+1}</td>`;
     html += `<td>${r.time || '<span class="nc">—</span>'}</td>`;
-    html += `<td class="model">${r.model || '<span class="nc">—</span>'}</td>`;
-    html += `<td>${r.action || '<span class="nc">—</span>'}</td>`;
+    html += `<td class="model">${r.model ? escapeHtml(r.model) : '<span class="nc">—</span>'}</td>`;
+    html += `<td>${r.action ? escapeHtml(r.action) : '<span class="nc">—</span>'}</td>`;
     html += `<td class="num">${r.inputCache || '<span class="nc">—</span>'}</td>`;
     html += `<td class="num">${r.output || '<span class="nc">—</span>'}</td>`;
     html += `<td class="num">${r.duration || '<span class="nc">—</span>'}</td>`;
@@ -927,7 +965,7 @@ function switchTab(tab) {
 }
 
 // ---- Export ----
-async function exportData() {
+async function exportData(chartOnly = false) {
   const btn = document.getElementById('exportBtn');
   const oldHtml = btn.innerHTML;
   btn.innerHTML = '\u2B07 Exporting...';
@@ -941,7 +979,7 @@ async function exportData() {
     if (agent) params.set('agents', agent);
     if (since) params.set('since', since);
     if (until) params.set('until', until);
-    const resp = await fetch('/api/export?' + params.toString());
+    const resp = await fetch((chartOnly ? '/api/chart-data?' : '/api/export?') + params.toString());
     if (!resp.ok) throw new Error('Export failed: ' + resp.status);
     const blob = await resp.blob();
     const disposition = resp.headers.get('Content-Disposition') || '';
@@ -1534,8 +1572,8 @@ function renderCompare() {
     { key: 'max_context', label: 'Peak Context (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '峰值上下文使用（各 session 实际达到的最大 token 数）。口径因 Agent 而异。' },
     { key: 'context_window', label: 'Context Window (avg)', agg: 'avg', fmt: fmtNum, unit: '', desc: '模型支持的最大上下文窗口。仅 DSH 从 contextPressure.contextWindow 获取；其他 Agent 数据源未存储。' },
     { key: 'cache_hit_rate', label: 'Cache Hit Rate', agg: 'avg', fmt: v => v != null ? (v*100).toFixed(1)+'%' : null, unit: '', desc: '缓存命中率 = cache_read / (input + cache_read)。input_includes_cache=false 时分子分母口径一致。' },
-    { key: 'llm_call_count', label: 'LLM Calls (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'LLM 调用次数总和。WorkBuddy=含 rawUsage 行数，TeleAgent=step-start 数，DSH=step-start 数。' },
-    { key: 'success_rate', label: 'LLM Success Rate', agg: 'avg', fmt: v => v != null ? (v*100).toFixed(0)+'%' : null, unit: '', desc: 'LLM 成功率 = 成功调用 / (成功 + 错误)。' },
+    { key: 'llm_call_count', label: 'LLM Calls (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '适配器可识别的逻辑调用数量；流段、助手消息另计，不代表统一 attempt 数。' },
+    { key: 'success_rate', label: 'LLM Known Outcomes', agg: 'avg', fmt: v => v != null ? (v*100).toFixed(0)+'%' : null, unit: '', desc: 'LLM 成功率 = 成功调用 / (成功 + 错误)。' },
     { key: 'llm_retry_count', label: 'LLM Retries (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: 'LLM 重试次数。仅 Mobilework 有精确 retry 事件；其他 nc。' },
     { key: 'tool_call_count', label: 'Tool Calls (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '工具调用次数总和。' },
     { key: 'human_confirm_count', label: 'Human Confirms (sum)', agg: 'sum', fmt: v => v != null ? Math.round(v) : null, unit: '', desc: '人工确认次数。TeleAgent（perm 行 by 非通配）、Doubao（user content 含确认关键词）、Mobilework（session.permission ask 规则 × tool.called 事件推断）可识别。' },

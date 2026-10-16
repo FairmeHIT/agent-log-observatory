@@ -1,3 +1,4 @@
+import {computeTokenMetrics} from '../lib/token-metrics.mjs';
 import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig, config as globalConfig } from "../lib/config.mjs";
 import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/normalizer.mjs";
@@ -228,7 +229,7 @@ export class CodexAdapter extends BaseAdapter {
         first_output_at: null,
         generation_ended_at: t.completed_at ? t.completed_at * 1000 : null,
         turn_duration_ms: t.duration_ms ?? null,
-        status: t.status === "completed" ? "ok" : (t.status === "inProgress" ? "running" : "error"),
+        status: nativeStatus(t.status),
       };
       turnMap.set(t.turn_id, call);
       return call;
@@ -251,7 +252,7 @@ export class CodexAdapter extends BaseAdapter {
         tool_name: i.item_type === "mcpToolCall" ? safeJsonParse(i.item_json)?.tool : i.item_type,
         started_at: i.started_at_ms || null,
         ended_at: i.completed_at_ms || null,
-        status: "ok",
+        status: codexToolStatus(safeJsonParse(i.item_json)),
       }));
     return { llm_calls: llmCalls, tool_calls: toolCalls };
   }
@@ -262,26 +263,26 @@ export class CodexAdapter extends BaseAdapter {
     );
     const summary = { gateway: 0, tool: 0, model: 0, dependency: 0, agent: 0 };
     for (const t of turns) {
-      if (t.status && t.status !== "completed" && t.status !== "inProgress") {
+      if (nativeStatus(t.status) === 'error') {
         summary.agent++;
       }
     }
-    return { diagnostics: [], summary };
+    return { diagnostics: [], summary, source_available:true };
   }
 
   async extractMetrics(sessionId, options = {}) {
     const rollout = await this._readRolloutUsage(sessionId);
-    const usage = rollout ? rollout.records : await this._extractUsageFromLogs(sessionId, options);
+    const usage = options.usage ?? (rollout ? rollout.records : await this._extractUsageFromLogs(sessionId, options));
     const tokens = aggregateTokens(usage);
     const hasTokenBreakdown = usage.some((r) => r.input != null);
-    const calls = await this.extractCalls(sessionId, options);
+    const calls = options.calls ?? await this.extractCalls(sessionId, options);
     const llmCalls = calls.llm_calls || [];
     const toolCalls = calls.tool_calls || [];
     const llmOk = llmCalls.filter(c => c.status === "ok").length;
     const llmError = llmCalls.filter(c => c.status === "error").length;
 
     const ttftValues = llmCalls
-      .filter(c => c.requested_at && c.first_output_at)
+      .filter(c => Number.isFinite(c.requested_at) && Number.isFinite(c.first_output_at) && c.first_output_at >= c.requested_at)
       .map(c => c.first_output_at - c.requested_at);
     const ttftMs = ttftValues.length > 0
       ? Math.round(ttftValues.reduce((s, v) => s + v, 0) / ttftValues.length)
@@ -330,7 +331,7 @@ export class CodexAdapter extends BaseAdapter {
       ? (tokens.reported_total || null)
       : (tr.tokens_used ?? null);
 
-    const failures = await this.extractFailures(sessionId);
+    const failures = options.failures ?? await this.extractFailures(sessionId);
 
     return [
       makeMetricResult("llm_attempt_ttft_ms", ttftMs, {
@@ -342,34 +343,7 @@ export class CodexAdapter extends BaseAdapter {
       computeSessionFirstResponseMs(tr.created_at_ms ?? null, firstResponseEpoch, sessionId),
       turnE2e,
       lifespan,
-      makeMetricResult("token_input", hasTokenBreakdown ? (tokens.input || null) : null, {
-        unit: "tokens", scope: "session", scope_id: sessionId,
-        evidence_grade: hasTokenBreakdown ? "direct" : "unknown",
-        semantic_profile: "rollout_token_usage_record_sum",
-        ...(hasTokenBreakdown ? {} : { state: "not-captured", missing_reason: "not_instrumented" }),
-      }),
-      makeMetricResult("token_output", hasTokenBreakdown ? (tokens.output || null) : null, {
-        unit: "tokens", scope: "session", scope_id: sessionId,
-        evidence_grade: hasTokenBreakdown ? "direct" : "unknown",
-        semantic_profile: "rollout_token_usage_record_sum",
-        ...(hasTokenBreakdown ? {} : { state: "not-captured", missing_reason: "not_instrumented" }),
-      }),
-      makeMetricResult("token_cache_read", hasTokenBreakdown ? (tokens.cache_read || null) : null, {
-        unit: "tokens", scope: "session", scope_id: sessionId,
-        evidence_grade: hasTokenBreakdown ? "direct" : "unknown",
-        semantic_profile: "rollout_token_usage_record_sum",
-        ...(hasTokenBreakdown ? {} : { state: "not-captured", missing_reason: "not_instrumented" }),
-      }),
-      makeMetricResult("token_reasoning", hasTokenBreakdown ? (tokens.reasoning || null) : null, {
-        unit: "tokens", scope: "session", scope_id: sessionId,
-        evidence_grade: hasTokenBreakdown ? "direct" : "unknown",
-        semantic_profile: "rollout_token_usage_record_sum",
-        ...(hasTokenBreakdown ? {} : { state: "not-captured", missing_reason: "not_instrumented" }),
-      }),
-      makeMetricResult("token_total", totalTokens, {
-        unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
-        semantic_profile: rollout ? "rollout_token_usage_record_sum" : "total_usage_tokens_or_threads_tokens_used",
-      }),
+      ...computeTokenMetrics(usage,sessionId),
       makeMetricResult("credits", null, {
         scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
@@ -377,7 +351,7 @@ export class CodexAdapter extends BaseAdapter {
       makeMetricResult("llm_call_count", llmCalls.length, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      computeSuccessRate(llmOk, llmError),
+      computeSuccessRate(llmOk, llmError, llmCalls.length),
       makeMetricResult("llm_retry_count", null, {
         scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
@@ -385,7 +359,7 @@ export class CodexAdapter extends BaseAdapter {
       makeMetricResult("tool_call_count", toolCount, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      computeSuccessRate(toolCalls.filter(c => c.status === "ok").length, toolCalls.filter(c => c.status === "error").length),
+      {...computeSuccessRate(toolCalls.filter(c => c.status === "ok").length, toolCalls.filter(c => c.status === "error").length),metric:'tool_success_rate'},
       (() => { const r = computeCacheHitRate(usage); r.scope = "session"; r.scope_id = sessionId; return r; })(),
       makeMetricResult("generation_output_tps", null, {
         unit: "tok/s", scope: "session", scope_id: sessionId,
@@ -409,12 +383,10 @@ export class CodexAdapter extends BaseAdapter {
       makeMetricResult("event_count_tool_call", toolCount, {
         scope: "session", scope_id: sessionId, evidence_grade: "direct",
       }),
-      makeMetricResult("event_count_tool_result", toolCount, {
-        scope: "session", scope_id: sessionId, evidence_grade: "derived",
-      }),
-      makeMetricResult("max_context", rollout && rollout.maxInput != null ? rollout.maxInput : totalTokens, {
+      makeMetricResult("event_count_tool_result", null, {scope:'session',scope_id:sessionId,missing_reason:'semantic_unknown',semantic_profile:'calls_do_not_prove_result_events'}),
+      makeMetricResult("max_context", rollout?.maxInput ?? null, {
         unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "derived",
-        semantic_profile: rollout && rollout.maxInput != null ? "peak_input_tokens_including_cache" : "total_tokens_used_approximate",
+        semantic_profile: "peak_input_tokens_including_cache",
       }),
       makeMetricResult("context_window", (rollout && rollout.contextWindow) || cfg.contextWindow, {
         unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct",
@@ -428,7 +400,7 @@ export class CodexAdapter extends BaseAdapter {
         scope: "session", scope_id: sessionId,
         state: "not-captured", missing_reason: "not_instrumented",
       }),
-      ...makeErrorCountMetrics(llmError, toolCalls.filter(c => c.status === "error").length, failures, sessionId),
+      ...makeErrorCountMetrics(llmError, toolCalls.filter(c => c.status === "error").length, failures, sessionId, calls),
     ];
   }
 
@@ -468,6 +440,23 @@ export class CodexAdapter extends BaseAdapter {
 }
 
 function safeJsonParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+function nativeStatus(status) {
+  if(status==='completed')return 'ok';
+  if(['failed','error'].includes(status))return 'error';
+  if(['cancelled','canceled','interrupted'].includes(status))return 'cancelled';
+  if(['inProgress','running'].includes(status))return 'running';
+  return 'unknown';
+}
+export function codexToolStatus(item) {
+  if(!item)return 'unknown';
+  const status=nativeStatus(item.status);
+  if(status!=='ok')return status;
+  const exit=item.exitCode ?? item.exit_code;
+  if(Number.isInteger(exit))return exit===0?'ok':'error';
+  if(item.error)return 'error';
+  return 'ok';
+}
 
 // 归一化 Windows 扩展路径：\\?\C:\x → C:\x；\\?\UNC\server\share → \\server\share
 export function normalizeWinPath(p) {

@@ -1,8 +1,10 @@
+import {computeTokenMetrics} from '../lib/token-metrics.mjs';
 import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig, config as globalConfig } from "../lib/config.mjs";
-import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/normalizer.mjs";
+import { normalizeEvent, normalizeSession } from "../lib/normalizer.mjs";
+import { openencodeStorageUsageRecord } from "../lib/opencode-storage-semantics.mjs";
 import { makeDataCompleteness, makeMetricResult } from "../lib/evidence.mjs";
-import { computeSuccessRate, computeCacheHitRate, computeOutputTps, aggregateTokens, computeSessionTurnE2eAvg, computeSessionLifespanMs, computeSessionFirstResponseMs, makeErrorCountMetrics } from "../lib/metrics.mjs";
+import { computeSuccessRate, computeCacheHitRate, computeOutputTps, aggregateTokens, computeSessionTurnE2eAvg, computeSessionLifespanMs, computeSessionFirstResponseMs, makeErrorCountMetrics, computeCallRecordMetrics } from "../lib/metrics.mjs";
 import { querySqlite } from "../lib/sqlite-query.mjs";
 import {
   hasCollectorData,
@@ -70,6 +72,7 @@ export class MobileworkAdapter extends BaseAdapter {
     const dbPath = path.join(cfg.dataDir, "xdg", "data", "opencode", "opencode.db");
     const sqliteExe = globalConfig.sqliteExecutable;
     let whereClause = "1=1";
+    if(options.session_id){if(!/^[A-Za-z0-9_-]{1,128}$/.test(options.session_id))throw Error('invalid_session_id');whereClause+=` AND id = '${options.session_id}'`;}
     if (options.since) whereClause += ` AND time_created >= ${options.since}`;
     if (options.until) whereClause += ` AND time_created <= ${options.until}`;
     const rows = await query(sqliteExe, dbPath, `SELECT id, model, agent, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated, parent_id, workspace_id, title FROM session WHERE ${whereClause} ORDER BY time_created DESC LIMIT 500`);
@@ -95,7 +98,14 @@ export class MobileworkAdapter extends BaseAdapter {
     const cfg = resolveAgentConfig("mobilework");
     const dbPath = path.join(cfg.dataDir, "xdg", "data", "opencode", "opencode.db");
     const sqliteExe = globalConfig.sqliteExecutable;
-    const rows = await query(sqliteExe, dbPath, `SELECT type, data, seq FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
+    const rows = await query(sqliteExe, dbPath, `SELECT type, seq,
+       json_extract(data, '$.timestamp') as timestamp,
+       json_extract(data, '$.assistantMessageID') as assistantMessageID,
+       json_extract(data, '$.callID') as callID,
+       coalesce(json_extract(data, '$.tool'), json_extract(data, '$.toolName'), json_extract(data, '$.name')) as tool,
+       json_extract(data, '$.model.id') as model_id,
+       json_extract(data, '$.model.providerID') as provider_id
+       FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
     return rows.map((r, i) => normalizeEvent(mapMobileworkEvent(r, sessionId, i)));
   }
 
@@ -136,7 +146,8 @@ export class MobileworkAdapter extends BaseAdapter {
     const dbPath = path.join(cfg.dataDir, "xdg", "data", "opencode", "opencode.db");
     const sqliteExe = globalConfig.sqliteExecutable;
     const rows = await query(sqliteExe, dbPath, `SELECT id, model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = '${sessionId.replace(/'/g, "''")}'`);
-    return rows.map((r) => normalizeUsageRecord({
+    // opencode 存储口径：tokens_input 不含 cache、tokens_output 不含 reasoning（见 lib/opencode-storage-semantics.mjs）
+    return rows.map((r) => openencodeStorageUsageRecord({
       usage_record_id: `mw_session_${r.id}`,
       scope: "session",
       scope_id: r.id,
@@ -158,85 +169,16 @@ export class MobileworkAdapter extends BaseAdapter {
     const toolCalls = [];
 
     const events = await query(sqliteExe, dbPath,
-      `SELECT type, data, seq FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
+      `SELECT type, seq,
+       json_extract(data, '$.timestamp') as timestamp,
+       json_extract(data, '$.assistantMessageID') as assistantMessageID,
+       json_extract(data, '$.callID') as callID,
+       coalesce(json_extract(data, '$.tool'), json_extract(data, '$.toolName'), json_extract(data, '$.name')) as tool,
+       json_extract(data, '$.model.id') as model_id,
+       json_extract(data, '$.model.providerID') as provider_id
+       FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
 
-    let currentStepId = null;
-    let stepCount = 0;
-
-    for (const ev of events) {
-      const data = safeJsonParse(ev.data) || {};
-      const type = ev.type || "";
-      const ts = data.timestamp;
-
-      if (type.includes("step.started")) {
-        currentStepId = `mw_step_${stepCount++}`;
-      }
-      if (type.includes("step.ended") || type.includes("step.failed")) {
-        currentStepId = null;
-      }
-      if (type.includes("text.started") || type.includes("reasoning.started") || type.includes("tool.input.started")) {
-        const msgId = data.assistantMessageID || `mw_msg_${ev.seq}`;
-        llmCalls.push({
-          llm_call_id: msgId,
-          session_id: sessionId,
-          agent_object: "mobilework",
-          requested_model: data.model?.id || (typeof data.model === "string" ? data.model : null),
-          routed_model: data.model?.id || (typeof data.model === "string" ? data.model : null),
-          provider: data.model?.providerID || null,
-          requested_at: ts,
-          first_output_at: null,
-          generation_ended_at: null,
-          status: "running",
-          step_id: currentStepId,
-          usage_record_ids: [],
-        });
-      }
-      if (type.includes("text.ended") || type.includes("reasoning.ended") || type.includes("tool.input.ended")) {
-        const msgId = data.assistantMessageID;
-        const c = llmCalls.find((c) => c.llm_call_id === msgId && c.status === "running");
-        if (c) {
-          if (!c.first_output_at) c.first_output_at = ts;
-          c.generation_ended_at = ts;
-          c.status = "ok";
-        }
-      }
-      if (type.includes("tool.called")) {
-        const callId = data.callID || `mw_tool_${toolCalls.length}`;
-        toolCalls.push({
-          call_id: callId,
-          session_id: sessionId,
-          agent_object: "mobilework",
-          tool_name: data.tool || null,
-          started_at: ts,
-          ended_at: null,
-          status: "running",
-          exit_code: null,
-          step_id: currentStepId,
-        });
-      }
-      if (type.includes("tool.success")) {
-        const callId = data.callID;
-        const tc = toolCalls.find((t) => t.call_id === callId && t.status === "running");
-        if (tc) { tc.ended_at = ts; tc.status = "ok"; }
-      }
-      if (type.includes("tool.failed")) {
-        const callId = data.callID;
-        const tc = toolCalls.find((t) => t.call_id === callId && t.status === "running");
-        if (tc) { tc.ended_at = ts; tc.status = "error"; }
-      }
-      if (type.includes("retried")) {
-        llmCalls.push({
-          llm_call_id: `mw_retry_${ev.seq}`,
-          session_id: sessionId,
-          agent_object: "mobilework",
-          requested_model: null, routed_model: null, provider: null,
-          requested_at: ts, first_output_at: null, generation_ended_at: null,
-          status: "ok", is_retry: true, usage_record_ids: [],
-        });
-      }
-    }
-
-    return { llm_calls: llmCalls, tool_calls: toolCalls };
+    return parseMobileworkCalls(events, sessionId);
   }
 
   async extractFailures(sessionId, options = {}) {
@@ -247,7 +189,14 @@ export class MobileworkAdapter extends BaseAdapter {
     const summary = { gateway: 0, tool: 0, model: 0, dependency: 0, agent: 0 };
 
     const events = await query(sqliteExe, dbPath,
-      `SELECT type, data, seq FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
+      `SELECT type, seq,
+       json_extract(data, '$.timestamp') as timestamp,
+       json_extract(data, '$.assistantMessageID') as assistantMessageID,
+       json_extract(data, '$.callID') as callID,
+       coalesce(json_extract(data, '$.tool'), json_extract(data, '$.toolName'), json_extract(data, '$.name')) as tool,
+       json_extract(data, '$.model.id') as model_id,
+       json_extract(data, '$.model.providerID') as provider_id
+       FROM event WHERE aggregate_id = '${sessionId.replace(/'/g, "''")}' ORDER BY seq ASC`);
 
     for (const ev of events) {
       const data = safeJsonParse(ev.data) || {};
@@ -302,22 +251,22 @@ export class MobileworkAdapter extends BaseAdapter {
           diagnostics.push({
             category: cat,
             source: "maf.log",
-            scope: obj.scope || null,
-            message: msg.substring(0, 200),
+            scope: 'installation',
             evidence_grade: "estimated",
             rule: "maf.log level=error",
           });
-          summary[cat]++;
+          // A process-wide log line without an explicit session binding cannot
+          // be counted as a failure of every session in the installation.
         } catch {}
       }
     } catch {}
 
-    return { diagnostics, summary };
+    return { diagnostics, summary, source_available:events.length>0 };
   }
 
   async extractMetrics(sessionId, options = {}) {
-    const usage = await this.extractUsage(sessionId);
-    const calls = await this.extractCalls(sessionId, options);
+    const usage = options.usage ?? await this.extractUsage(sessionId);
+    const calls = options.calls ?? await this.extractCalls(sessionId, options);
     const tokens = aggregateTokens(usage);
 
     const llmCalls = (calls.llm_calls || []).filter((c) => !c.is_retry);
@@ -356,18 +305,13 @@ export class MobileworkAdapter extends BaseAdapter {
     // 无采集器数据时回退 stream-timings.json（已知时间戳碰撞：startedAt===firstChunkAt，
     // 因 trace-dashboard sidecar 闭源无法修复，会判 timestamp_collision）。
     let ttftResult = null;
+    // Proxy traffic has no native session ID and records response-arrival,
+    // so a wall-clock overlap cannot prove either membership or first token.
+    // Only explicitly session-bound records with a first-output anchor qualify.
     try {
-      const collectorActive = await hasCollectorData("mobilework");
-      if (collectorActive && sr.time_created && sr.time_updated) {
-        const allAttempts = await readAllAttempts("mobilework", {
-          since: sr.time_created,
-          until: sr.time_updated,
-        });
-        const matched = filterByTimeWindow(allAttempts, sr.time_created, sr.time_updated);
-        if (matched.length > 0) {
-          ttftResult = computeTtftFromAttempts(matched, sessionId);
-        }
-      }
+      const attempts=await readAllAttempts('mobilework');
+      const matched=attempts.filter(a=>a.session_id===sessionId && a.first_output_anchor==='model_output');
+      if(matched.length)ttftResult=computeTtftFromAttempts(matched,sessionId);
     } catch {}
 
     // Fallback: stream-timings.json（trace-dashboard sidecar，闭源，时间戳碰撞）
@@ -458,31 +402,27 @@ export class MobileworkAdapter extends BaseAdapter {
       `SELECT MIN(p.time_created) as first_resp FROM part p LEFT JOIN message m ON p.message_id = m.id WHERE p.session_id = '${sessionId.replace(/'/g, "''")}' AND json_extract(m.data,'$.role') = 'assistant' AND json_extract(p.data,'$.type') IN ('text','reasoning','step-finish')`);
     const firstResponseEpoch = firstRespRows[0]?.first_resp ?? null;
 
-    const failures = await this.extractFailures(sessionId);
+    const failures = options.failures ?? await this.extractFailures(sessionId);
 
     return [
       turnE2e,
       lifespan,
       ttftResult,
       computeSessionFirstResponseMs(sr.time_created ?? null, firstResponseEpoch, sessionId),
-      makeMetricResult("token_input", tokens.input || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_output", tokens.output || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_cache_read", tokens.cache_read || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_reasoning", tokens.reasoning || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_total", (tokens.input || 0) + (tokens.output || 0) || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "derived" }),
+      ...computeTokenMetrics(usage,sessionId),
       makeMetricResult("credits", tokens.monetary_cost || null, { unit: "USD", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("llm_call_count", llmCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      computeSuccessRate(llmOk, llmError),
-      makeMetricResult("llm_retry_count", retryCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
+      makeMetricResult("llm_call_count", null, { scope: "session", scope_id: sessionId, missing_reason: "semantic_unknown", semantic_profile: "stream_segments_do_not_prove_logical_calls" }),
+      computeSuccessRate(llmOk, llmError, llmCalls.length),
+      makeMetricResult("llm_retry_count", calls.retry_event_count ?? retryCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("tool_call_count", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      computeSuccessRate(toolOk, toolError),
+      { ...computeSuccessRate(toolOk, toolError, toolCalls.length), metric: "tool_success_rate" },
       computeCacheHitRate(usage),
       computeOutputTps(tokens.output, generationMs),
       makeMetricResult("step_count", stepCount, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("compaction_count", compactionCount, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("event_count_agent_input", promptedCount, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("event_count_tool_call", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("event_count_tool_result", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
+      makeMetricResult("event_count_tool_result", null, {scope:'session',scope_id:sessionId,missing_reason:'semantic_unknown',semantic_profile:'calls_do_not_prove_result_events'}),
       makeMetricResult("max_context", usage.length > 0 ? Math.max(...usage.map((r) => (r.input || 0) + (r.cache_read || 0))) : null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "derived", semantic_profile: "peak_input_plus_cache_read" }),
       makeMetricResult("context_window", null, { unit: "tokens", scope: "session", scope_id: sessionId, state: "not-captured", missing_reason: "not_instrumented" }),
       makeMetricResult("human_confirm_count", humanConfirmCount, {
@@ -492,7 +432,8 @@ export class MobileworkAdapter extends BaseAdapter {
         missing_reason: humanConfirmCount != null ? null : "not_instrumented",
         semantic_profile: "inferred_from_permission_ask_rules_x_tool_called",
       }),
-      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId, calls),
+      ...computeCallRecordMetrics(calls, sessionId),
     ];
   }
 
@@ -550,5 +491,89 @@ function mapMobileworkEvent(row, sessionId, seq) {
 
 async function query(sqlite, db, sql) {
   if (!sqlite || !db) return [];
-  return querySqlite(sqlite, db, sql);
+  const rows = await querySqlite(sqlite, db, sql);
+  if (sql.includes('as assistantMessageID')) return rows.map(r=>({...r, data:JSON.stringify({
+    timestamp:r.timestamp,assistantMessageID:r.assistantMessageID,callID:r.callID,tool:r.tool,
+    model:r.model_id?{id:r.model_id,providerID:r.provider_id}:null,
+  })}));
+  return rows;
+}
+
+// Pure event pairing for read-only extraction and protocol fixtures.
+export function parseMobileworkCalls(events, sessionId) {
+    const llmCalls = [], toolCalls = [];
+    let currentStepId = null;
+    let stepCount = 0;
+    let retryCount = 0;
+
+    for (const ev of events) {
+      const data = safeJsonParse(ev.data) || {};
+      const type = ev.type || "";
+      const ts = data.timestamp;
+
+      if (type.includes("step.started")) {
+        currentStepId = `mw_step_${stepCount++}`;
+      }
+      if (type.includes("step.ended") || type.includes("step.failed")) {
+        currentStepId = null;
+      }
+      if (type.includes("text.started") || type.includes("reasoning.started") || type.includes("tool.input.started")) {
+        const msgId = data.assistantMessageID || `mw_msg_${ev.seq}`;
+        llmCalls.push({
+          llm_call_id: `${msgId}:${ev.seq}`,
+          message_id: msgId,
+          record_grain: "stream-segment",
+          stream_kind: type.replace(/\.started.*$/, ""),
+          session_id: sessionId,
+          agent_object: "mobilework",
+          requested_model: data.model?.id || (typeof data.model === "string" ? data.model : null),
+          routed_model: data.model?.id || (typeof data.model === "string" ? data.model : null),
+          provider: data.model?.providerID || null,
+          requested_at: ts,
+          first_output_at: null,
+          generation_ended_at: null,
+          status: "running",
+          step_id: currentStepId,
+          usage_record_ids: [],
+        });
+      }
+      if (type.includes("text.ended") || type.includes("reasoning.ended") || type.includes("tool.input.ended")) {
+        const msgId = data.assistantMessageID;
+        const c = llmCalls.find((c) => c.message_id === msgId && c.stream_kind === type.replace(/\.ended.*$/, "") && c.status === "running");
+        if (c) {
+          // Stream-end is not a first-token arrival anchor.
+          c.generation_ended_at = ts;
+          c.status = "ok";
+        }
+      }
+      if (type.includes("tool.called")) {
+        const callId = data.callID || `mw_tool_${toolCalls.length}`;
+        toolCalls.push({
+          call_id: callId,
+          session_id: sessionId,
+          agent_object: "mobilework",
+          tool_name: data.tool || data.toolName || data.name || null,
+          started_at: ts,
+          ended_at: null,
+          status: "running",
+          exit_code: null,
+          step_id: currentStepId,
+        });
+      }
+      if (type.includes("tool.success")) {
+        const callId = data.callID;
+        const tc = toolCalls.find((t) => t.call_id === callId && t.status === "running");
+        if (tc) { tc.ended_at = ts; tc.status = "ok"; }
+      }
+      if (type.includes("tool.failed")) {
+        const callId = data.callID;
+        const tc = toolCalls.find((t) => t.call_id === callId && t.status === "running");
+        if (tc) { tc.ended_at = ts; tc.status = "error"; }
+      }
+      if (type.includes("retried")) {
+        retryCount++;
+      }
+    }
+
+    return { llm_calls: llmCalls, tool_calls: toolCalls, retry_event_count: retryCount };
 }

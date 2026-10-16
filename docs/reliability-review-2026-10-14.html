@@ -1,0 +1,40 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>日志采集与 Console 统计可靠性复核 · 2026-10-14</title>
+<style>body{max-width:1080px;margin:36px auto;padding:0 24px;font:16px/1.7 system-ui;color:#203047}h1,h2{line-height:1.3}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:10px;border:1px solid #ccd5df;text-align:left;vertical-align:top}th{background:#eef3f8}code{background:#eef3f8;padding:2px 5px}a{color:#1264b4}.notice{background:#fff4d8;padding:16px;border-left:4px solid #bc8300}</style>
+<h1>日志采集与 Console 统计可靠性复核</h1><p>2026-10-14 · Observatory v0.0.12 · Windows x64 / Node 24.19.0</p>
+<p class="notice">结论：发现并修复多处可污染产品判断的采集及统计缺陷。修复后的入口可以隔离身份不明、终态未知、口径不明及不可核验的保存数据；现有历史的覆盖不足，不能据此声称跨 Agent 成本、稳定性或产品能力排名可靠。所有旧 Trial、Outcome、归档与 Agent 原始日志保持原样。</p>
+<h2>范围与责任</h2><p>核对原生源发现、只读 SQLite、适配器事件/调用/usage 提取、共享指标、缓存/API、采集器时间锚点、独立会话绑定、Console 不可变归档/快照与总览统计和绘图。主归属 Observation &amp; Evidence，Console 复用这一层并承担 Presentation/Delivery 与 Closed-loop/Governance 的保存和统计，不重新评分。保留进入检查前已有的未提交改动，没有提交或覆盖这些改动。</p>
+<h2>缺陷与修复</h2><table><tr><th>等级</th><th>原风险</th><th>最终处理</th></tr>
+<tr><td>P1</td><td>Console 直接读 metrics.json，绕过清单封印及文件哈希；只有 object/trial_id 的键会跨运行/任务串值。</td><td>复用归档校验，按 evaluation_run_id/task_id/object/trial_id 关联；明确 session/self 与日志准入门禁，重复会话归属排除；诊断显示不可核验数据。</td></tr>
+<tr><td>P1</td><td>逐字段保留首个有效值，混合多个采样版本；新版缺失会借旧值。显式快照可能采到缓存。</td><td>每 Trial 选最新整份已验证归档；快照只补没有归档的 Trial，新快照请求 fresh=1 并写独立 SHA-256 封印。旧未封印快照可阅读但不进入图表；不改写历史。</td></tr>
+<tr><td>P1</td><td>Mobilework/opencode 在缓存包含关系未知时把 input/output 相加；零分项被 || null 吃掉，缺失被默认加零。</td><td>共享 token-metrics 引擎保留真零、分项覆盖、源包含关系与 profile。去重 usage 身份、优先 session 范围，拒绝冲突；不确定的全会话总量 null。历史未知 Token 总量隔离出总览。</td></tr>
+<tr><td>P1</td><td>SQLite 非零退出/解析失败静默返回 []；list 回退会损坏换行、分隔符、SQL null。</td><td>CLI -readonly + 有界超时；编码异常使用 Node 内置 SQLite readOnly 无损读取同一 SQL；读取失败显式报错。Windows 子进程隐藏，仅结束本次超时查询进程。</td></tr>
+<tr><td>P1</td><td>Codex 工具一律 ok、未知 Turn 当 error；DSH 开始/工具调用直接当成功；Codex 两类成功率重名。</td><td>保留 unknown/running/cancelled 与明确失败；区分 success_rate/tool_success_rate。未知终态的零错误数保持 null，已见错误仅部分覆盖；调用数不能冒充原生结果事件数。</td></tr>
+<tr><td>P1</td><td>generation span 结束冒充首输出；无 session ID 的代理按时间窗借给会话，响应到达当首 token。</td><td>WorkBuddy 完成 span 不补 TTFT；Mobilework 代理必须明确 session membership 与首输出锚点，未绑定代理记录不能填会话 TTFT。Codex/opencode 派生输出事件仍不声称原生首 token。</td></tr>
+<tr><td>P1</td><td>Pass@5 对任意 ≥5 次取至少一次，Pass^5 按目录 mtime 及删除 unknown 后的连续序列推算。</td><td>按运行、任务版本、评分范围、对象、轨道与策略分组；只有恰好五条不同且全部已评分 Trial 才算 Pass。未知/额外执行不连成成功序列；Pass^5 是五次全成功，mtime 不恢复实验顺序。</td></tr>
+<tr><td>P1</td><td>下划线任意字段绕过白名单，调用/指标/诊断 API 未统一白名单过滤，正文可通过诊断 message 出站。</td><td>取消下划线旁路，诊断正文不进入白名单；调用/指标/失败与摘要 API 使用 redact + whitelistFilter。对话正文接口不再返回 Prompt/模型正文；保留结构化元数据。</td></tr>
+<tr><td>P2</td><td>负时长/非法数字、累计 Token 当 max_context、部分样本当完整；不同版本/单位/profile 混合，比例求和及 100% 格式错。</td><td>非法数字和时钟冲突 null；取消累计 Token 峰值回退；partial/captured 分开计数。混合口径不汇总；比例 sum=null，仅完整一致 numerator/denominator 才 pooled_rate；前端按类型显示比例与覆盖。</td></tr></table>
+<h2>验证回执</h2><table><tr><th>类别</th><th>证据</th><th>结论边界</th></tr>
+<tr><td>自动测试</td><td>Observatory npm test：134/134；Console npm test：1000/1000；最终保存/归档/接入专项：48/48。</td><td>合成协议、临时 SQLite/运行目录和假执行端口；不等于真实 Agent 发题或业务验收。</td></tr>
+<tr><td>浏览器</td><td>Edge headless：browser-smoke、analysis-archives-browser-smoke、saved-metrics-browser-smoke 通过。新专项覆盖混合口径、部分覆盖、损坏排除、扫描上限、100% 比例与五次实验文案。</td><td>只连接临时 fixture，没有执行真实 Agent。</td></tr>
+<tr><td>运行时与原生模块</td><td>doctor 通过 Node/平台、6 项 vendored SHA-256、SQLite CLI、better-sqlite3 原生加载与查询。</td><td>模块可用不代表所有数据源覆盖完整；并非七个 Agent 都必须安装。</td></tr>
+<tr><td>真实只读抽样</td><td>七个 Agent 各一个本机既有会话；所有六类读取分段完成，非法/负指标与重名指标均为 0。未获取的 Token/TTFT 保持 not-captured。</td><td>样本仅七个会话；没有发送 Prompt、安装采集器、改账号/配置或修改源库。不能外推全历史与每种客户端版本。</td></tr>
+<tr><td>保存数据只读核查</td><td>142 个归档目录，按全身份选择 127 条 Trial 采样；101 条未准入，19 个历史 Token 总量缺乏口径证明。扫描标准目录 743 条 Trial，full_pass/partial_pass 中只有 6 条可进入 Token 图，554 条缺失。</td><td>这组数量来自本次新代码的标准目录扫描；未包含旧运行服务额外原生投影，不能与旧服务的样本数直接做同群对比。缺失不折算为 0；样本覆盖不足以做四对象成本排名。</td></tr>
+<tr><td>安装与发布</td><td>主目录 setup 因运行中 better-sqlite3 文件锁出现 EPERM；按 vendor 原件逐字节恢复依赖，doctor 重验通过。完整发布与安装验证在隔离副本完成。</td><td>未停止使用中的服务或 Agent。发布是本地白名单工程产物，未上传/公开发布，不包含个人配置、真实历史和私有回执。</td></tr></table>
+<h2>使用与遗留边界</h2><p>首次复核时运行服务仍加载旧后端；后续已按用户授权核验中断、追加审计并升级 8780/8790，最新回执见本页末尾。缺失新增口径的旧档保持原样，不能通过修改 CSV、填零或复制近邻会话回填。显式补采记录新的采样时间，不能冒充任务结束时的原始事实。</p>
+<p>原生源持续变化时，导出是有界读取窗口，不是跨客户端事务快照。摘要 success_rate 只描述调用终态，业务成功仍依赖独立 Outcome。全任务成本、失败任务成本、不同任务/模型/评分范围的样本偏差需另行分组分析；只对通过任务画消费图存在选择偏差。错误日志模式属于观察证据，不是根因证明。严格原生 Trace 准入与 release_eligible 不由这些修复升级。供应链来源签名与 SQLite 上游原件来源仍按依赖清单的既有缺口处理；跨平台、每版客户端及真实 CDP/Hook 新采集未在本次验收。</p>
+<h2>工程入口</h2><p><a href="../lib/token-metrics.mjs">共享 Token 口径</a> · <a href="../lib/sqlite-query.mjs">SQLite 只读读取</a> · <a href="../tests/test-reliability.mjs">可靠性回归</a> · <a href="../../evaluation-console/console/persisted-observations.mjs">Console 保存统计入口</a> · <a href="../../evaluation-console/docs/object-adapters.html#observation-reliability-20261014">Console 接入契约</a></p><h2 id="capture-backfill">评测结束保存与近 7 天补采增量</h2>
+<p>本节为后续补齐结果，前文表格保留首次复核时的基线。已修复归档层覆盖原生 manifest 会话绑定、调用 scope_id 被误当会话 ID、WorkBuddy 清理索引后的历史身份核验、长批次共用短时限及未等待保存的问题。每会话独立时限与有限读取重试；持久任务最多 3 轮恢复；重启恢复登记任务，不重投评测。批次保存后派发，单独提交保存期间保留占用，维护排空等待在途归档。Console 统一字段结构、不可变采样版本、来源哈希和缺失理由继续保留。</p>
+<p>补采窗口：2026-10-07 19:34:10 至 2026-10-14 19:34:10，Asia/Shanghai。688 个终态提交均完成新建归档；609 条实际 Trial 中 594 条会话观测准入；79 个来源没有实际 Trial，不能计为 Token 样本。另核查 8 条未列入 Suite 终态摘要的原生 Trial，保存 5 条完成快照；2 条父执行未收束、1 条原生终态未证明，保留排除。原始提交 SHA-256 全部匹配。所有旧档、原生日志、Trial 与评分保留；补采采样时间是现在，不能伪装成历史完成快照。中断补采过程中留下 1 个未完成归档目录，校验失败并隔离出图表，原字节保留。</p>
+<table><tr><th>近 7 天全部已评分（含未通过）</th><th>Input</th><th>Output</th><th>Cache Read</th><th>有效 Total</th></tr>
+<tr><td>WorkBuddy</td><td>222/222 · 100%</td><td>222/222 · 100%</td><td>222/222 · 100%</td><td>222/222 · 100%</td></tr>
+<tr><td>Mobilework</td><td>176/178 · 98.9%</td><td>176/178 · 98.9%</td><td>176/178 · 98.9%</td><td>0/178 · 包含口径未知</td></tr>
+<tr><td>TeleAgent</td><td>41/44 · 93.2%</td><td>41/44 · 93.2%</td><td>41/44 · 93.2%</td><td>41/44 · 93.2%</td></tr>
+<tr><td>豆包</td><td colspan="4">0/111：原生日志没有 Token usage。其他可得观察指标仍保存；缺失不冒充 0。</td></tr></table>
+<p>每项图表使用同口径完整样本的算术平均，partial 单列观察均值；覆盖率分母为当前任务／结果筛选的已评分 Trial 数。四项独立取样，Total 缺失不会阻止分项显示；Cache Read 是否已含在 Input 由 profile 明示，不重复相加。支持按任务版本、评分范围、轨道、政策及结果筛选。不同 definition_version/unit/semantic_profile 不合并；跨任务总体只作描述，同题对照仍须考虑模型、缓存和样本偏差。Token 日期筛选使用记录时间，mtime 不参与。</p>
+<p>最终自动验证：Observatory 136/136；Console 1011/1011；Edge 主浏览器、归档与分项图回归通过。doctor 通过原生模块及 6 项 vendored 哈希。真实补采只读已有本机日志，没有发题、改源库、安装 Hook 或重算评分。私有回执在 agent-eval/.runtime/console-observation-backfills/ 下，发布不包含它们。新后端与当前服务的加载状态单独核查，不能把 fixture 或只读预览当作生产启用。</p>
+<h3 id="production-activation">生产启用与中断审计（2026-10-14）</h3>
+<p>操作员明确授权“先核验并审计收束，再升级服务”。本次中断批次控制循环已有结束证据、唯一子提交已退出，无活动原生 runner；其他对象只读预检通过。Console 排空停止新写操作；WorkBuddy 原生租约内核验路径、PID、创建时间和监听属主后关闭，确认进程及 CDP 全部退出，原 Gate SHA-256 保持不变。通过生产审计校验器追加独立 fallback 回执，原批次哈希复核未变。投影为 blocked，历史 timeout_cleanup_unverified 不改写、不认可为成功。具体身份与哈希仅保存在私有运行回执。</p>
+<p>发现并修复已结束控制循环保留自身维护预约、解除入口却将它误认作其他维护的死锁。只允许核验该批次自己的预约，成功封存独立回执后释放；失败、活跃子提交和其他维护继续阻断。旧加载进程无法使用新判断，本次先保存私有升级审计、核验在途观察保存为 0、无当前提交及所有阻断均属于该已结束批次，再按精确进程身份停止旧 Console；不删除实例锁。启动准备工具确认原生实例租约释放后启动新服务。Observatory 依据 Console 启动审计核验 cwd、argv、PID 与创建时间后升级，重新登记绝对脚本路径。此一次性处理不扩大常规启动器权限。</p>
+<p>新 Console 通过对象既有准备 API 完成 WorkBuddy 原 Gate 恢复、配置实例启动与完整复检，20:29:36 返回 ready；未提交任务、未创建 Trial、未重投剩余题目。私有升级回执位于 <code>agent-eval/.runtime/token-service-upgrade-audit-20261014.json</code>，批次解除、原生关闭与准备回执分别位于同一运行根目录的 <code>console-batch-resolutions/</code>、<code>workbuddy-environment-repairs/</code>、<code>console-environment/</code>。新增死锁回归后 Console 全量 1013/1013，Observatory 136/136。当前健康版本为 Observatory v0.0.12，Console 0.9.0；生产 Token API 已返回 component_sets 和 recorded-time 过滤口径。详细契约及显式补采工具见 <a href="../../evaluation-console/docs/object-adapters.html#token-capture-backfill-20261014">Console 采集补齐契约</a>。</p>
+<p>真实 Edge 生产页只读核验：近 7 天四个分项均可见，165 个任务选项（含全部）及结果筛选正常，页面错误、失败响应、写请求均为 0。图表使用逐项有效样本及覆盖率；输入是否含缓存、输出是否含 reasoning 均以可读文字展示，原始 semantic_profile 留在 API 与封印归档中。截图和详细数据回执保存在 Observatory 的 runtime/private/，不进入发布。</p>
+</html>

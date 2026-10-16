@@ -1,6 +1,8 @@
+import {computeTokenMetrics} from '../lib/token-metrics.mjs';
 import { BaseAdapter } from "./base-adapter.mjs";
 import { resolveAgentConfig, config as globalConfig } from "../lib/config.mjs";
-import { normalizeEvent, normalizeSession, normalizeUsageRecord } from "../lib/normalizer.mjs";
+import { normalizeEvent, normalizeSession } from "../lib/normalizer.mjs";
+import { openencodeStorageUsageRecord } from "../lib/opencode-storage-semantics.mjs";
 import { makeDataCompleteness, makeMetricResult } from "../lib/evidence.mjs";
 import {
   computeSuccessRate,
@@ -179,7 +181,8 @@ export class OpencodeAdapter extends BaseAdapter {
     for (const r of rows) {
       const d = safeJsonParse(r.data) || {};
       if (!d.tokens) continue;
-      records.push(normalizeUsageRecord({
+      // 消息级 tokens 与 session 表同源（getUsage 归一结构），同样适用存储级口径
+      records.push(openencodeStorageUsageRecord({
         usage_record_id: `opencode_msg_${sessionId}_${records.length}`,
         scope: "session",
         scope_id: sessionId,
@@ -200,7 +203,7 @@ export class OpencodeAdapter extends BaseAdapter {
       );
       const s = sessRows[0] || {};
       if (s.tokens_input || s.tokens_output) {
-        records.push(normalizeUsageRecord({
+        records.push(openencodeStorageUsageRecord({
           usage_record_id: `opencode_sess_${sessionId}`,
           scope: "session", scope_id: sessionId,
           input: s.tokens_input, output: s.tokens_output,
@@ -429,11 +432,7 @@ export class OpencodeAdapter extends BaseAdapter {
             unit: "ms", scope: "session", scope_id: sessionId,
             state: "not-captured", missing_reason: "not_instrumented",
           }),
-      makeMetricResult("token_input", tokens.input || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_output", tokens.output || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_cache_read", tokens.cache_read || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_reasoning", tokens.reasoning || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("token_total", (tokens.input || 0) + (tokens.output || 0) || null, { unit: "tokens", scope: "session", scope_id: sessionId, evidence_grade: "derived" }),
+      ...computeTokenMetrics(usage,sessionId),
       makeMetricResult("credits", tokens.monetary_cost || null, { unit: "USD", scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("max_context",
         usage.length > 0 ? Math.max(...usage.map((r) => (r.input || 0) + (r.cache_read || 0))) : null,
@@ -445,7 +444,7 @@ export class OpencodeAdapter extends BaseAdapter {
       }),
       computeCacheHitRate(usage),
       makeMetricResult("llm_call_count", llmCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      computeSuccessRate(llmOk, llmError),
+      computeSuccessRate(llmOk, llmError, llmCalls.length),
       // LLM 重试：优先用采集器数据（is_retry / attempt_index），无则回退 not_instrumented。
       collectorActive
         ? computeRetryFromAttempts(collectorAttempts, sessionId)
@@ -454,13 +453,13 @@ export class OpencodeAdapter extends BaseAdapter {
             state: "not-captured", missing_reason: "not_instrumented",
           }),
       makeMetricResult("tool_call_count", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      computeSuccessRate(toolOk, toolError),
+      { ...computeSuccessRate(toolOk, toolError, toolCalls.length), metric: "tool_success_rate" },
       makeMetricResult("step_count", stepCount, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("compaction_count", compactionCount, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("event_count_agent_input", userMsgCount, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("event_count_llm_response", llmCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
       makeMetricResult("event_count_tool_call", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
-      makeMetricResult("event_count_tool_result", toolCalls.length, { scope: "session", scope_id: sessionId, evidence_grade: "direct" }),
+      makeMetricResult("event_count_tool_result", null, {scope:'session',scope_id:sessionId,missing_reason:'semantic_unknown',semantic_profile:'calls_do_not_prove_result_events'}),
       makeMetricResult("human_confirm_count", humanConfirmCount, {
         scope: "session", scope_id: sessionId,
         state: humanConfirmCount != null ? "captured" : "not-captured",
@@ -468,7 +467,7 @@ export class OpencodeAdapter extends BaseAdapter {
         missing_reason: humanConfirmCount != null ? null : "not_instrumented",
         semantic_profile: "inferred_from_permission_ask_or_defaults_x_tool_parts",
       }),
-      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId),
+      ...makeErrorCountMetrics(llmError, toolError, failures, sessionId, calls),
     ];
   }
 }

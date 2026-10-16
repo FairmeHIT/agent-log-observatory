@@ -20,7 +20,8 @@
       "installDir": ""
     },
     "doubao": {
-      "installDir": ""
+      "installDir": "",
+      "conversationBindings": {}
     },
     "dsh": {
       "installDir": ""

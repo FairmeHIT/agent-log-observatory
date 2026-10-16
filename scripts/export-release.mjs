@@ -7,7 +7,8 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const packageInfo=JSON.parse(fs.readFileSync(path.join(root,"package.json")));
 const out=path.join(root,"releases","agent-log-observatory-"+packageInfo.version);
 if(fs.existsSync(out)) throw new Error("Release directory exists; preserve/archive it before exporting again: "+out);
-const files=["AGENTS.md","README.md","README.zh-CN.md","SPEC.md","LICENSE","CHANGELOG.md","THIRD_PARTY_NOTICES.md",".gitignore","package.json","package-lock.json","agent-log-observatory.config.example.json","server.mjs","index.html","start.cmd","stop.cmd","start-mobilework.cmd","runtime/sqlite3.exe","runtime/README.md","releases/README.md","docs/deployment.md","docs/dependency-inventory.md","docs/collector-design.md"];
+const files=["AGENTS.md","README.md","README.zh-CN.md","SPEC.md","LICENSE","CHANGELOG.md","THIRD_PARTY_NOTICES.md",".gitignore","package.json","package-lock.json","agent-log-observatory.config.example.json","server.mjs","index.html","start.cmd","stop.cmd","start-mobilework.cmd","runtime/sqlite3.exe","runtime/README.md","releases/README.md","docs/deployment.md","docs/chart-data.html","docs/dependency-inventory.md","docs/collector-design.md"];
+files.push("docs/reliability-review-2026-10-14.html", "docs/agents/doubao-agent.md", "docs/doubao-observability-research.md", "docs/doubao-observation-v0.3.md", "docs/doubao-validation-2026-10-13.md");
 const denied=new Set(["collectors/mobilework-llm-proxy/proxy-config.json"]);
 function collect(dir) {
   for(const entry of fs.readdirSync(path.join(root,dir),{withFileTypes:true})) {
@@ -27,4 +28,4 @@ for(const file of files.sort()) {
 }
 fs.writeFileSync(path.join(out,"release-manifest.json"),JSON.stringify({version:packageInfo.version,files:manifest},null,2));
 console.log("Exported "+manifest.length+" files: "+out);
-console.log("Private data excluded. Review source/fixture redaction and choose a project license before publishing.");
+console.log("Private data excluded. Review source/fixture redaction and third-party licenses before publishing.");
