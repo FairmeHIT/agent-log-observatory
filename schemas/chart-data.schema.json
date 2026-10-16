@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Observatory chart data 1.0",
+  "type": "object",
+  "required": ["schema_version", "k", "semantics", "statistics", "chart1_task_success", "chart2_error_attribution", "chart3_tokens_success", "chart4_stability_sr_pass", "chart5a_calls_success", "chart5b_tool_ecosystem", "session_evidence"],
+  "properties": {
+    "schema_version": {"const": "observatory-chart-data-1.0"},
+    "k": {"type": "integer", "minimum": 1},
+    "semantics": {"type": "object"},
+    "statistics": {"type": "object", "required": ["raw_sessions", "unique_sessions", "selected_sessions", "duplicate_snapshots"]},
+    "chart1_task_success": {"type": "object"},
+    "chart2_error_attribution": {"type": "object"},
+    "chart3_tokens_success": {"type": "object"},
+    "chart4_stability_sr_pass": {"type": "object"},
+    "chart5a_calls_success": {"type": "object"},
+    "chart5b_tool_ecosystem": {"type": "object"},
+    "session_evidence": {"type": "array", "items": {"type": "object", "required": ["source_id", "agent", "installation_id", "session_id", "activity", "task_success", "issues"]}},
+    "sources": {"type": "array", "items": {"type": "object", "required": ["source_id", "sha256"]}}
+  }
+}

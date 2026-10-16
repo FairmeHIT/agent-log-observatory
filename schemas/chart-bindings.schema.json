@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Explicit chart cohort and task/trial/outcome bindings",
+  "type": "object",
+  "required": ["bindings"],
+  "additionalProperties": false,
+  "properties": {
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "agent", "session_id"],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "agent": {"type": "string", "minLength": 1},
+          "installation_id": {"type": "string", "minLength": 1},
+          "session_id": {"type": "string", "minLength": 1},
+          "include": {"type": "boolean"},
+          "task_id": {"type": "string", "minLength": 1},
+          "trial_id": {"type": "string", "minLength": 1},
+          "batch_id": {"type": "string", "minLength": 1},
+          "trial_index": {"type": "integer", "minimum": 1},
+          "outcome": {
+            "type": "object",
+            "required": ["passed", "verifier", "evidence_ref"],
+            "additionalProperties": false,
+            "properties": {
+              "passed": {"type": "boolean"},
+              "verifier": {"type": "string", "minLength": 1},
+              "evidence_ref": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}
