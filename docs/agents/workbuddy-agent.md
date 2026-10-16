@@ -1,3 +1,7 @@
+> 历史身份：sessions/*.json 清理后，projects 下 transcript 必须包含与文件名匹配的原生 sessionId，且没有冲突 sessionId，才可恢复归档会话。调用级 usage 的 scope_id 是消息/调用 ID；归属使用显式 session_id，不能混为会话 ID。
+
+> 2026-10-14 v0.0.12 可靠性修复：以 [复核回执](../reliability-review-2026-10-14.html) 为最新指标准入规则。Token 总量不再在包含关系未知时相加；未观测终态不能补成功；generation end、代理响应头和未绑定时间窗不能证明原生首 token。下文历史数据源样本不自动证明当前指标完整覆盖。
+
 # WorkBuddy 数据源明细
 
 > 本文件从 [SPEC.md](../../SPEC.md) §2.2 拆分，自包含 WorkBuddy 的数据源探测明细：安装目录、数据目录、数据源表、事件格式、字段语义、指标可用性与限制。  

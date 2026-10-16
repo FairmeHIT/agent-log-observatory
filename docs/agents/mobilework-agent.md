@@ -1,3 +1,9 @@
+> 2026-10-14：extractSessions({session_id}) 使用精确原生 ID 的只读查询；历史会话身份核验不受最近会话列表上限影响。非法 ID 拒绝。
+
+> 2026-10-14 v0.0.12 可靠性修复：以 [复核回执](../reliability-review-2026-10-14.html) 为最新指标准入规则。Token 总量不再在包含关系未知时相加；未观测终态不能补成功；generation end、代理响应头和未绑定时间窗不能证明原生首 token。下文历史数据源样本不自动证明当前指标完整覆盖。
+>
+> 2026-10-15 v0.0.13：Mobilework 内嵌 opencode 引擎的存储级 token 口径已实证（证据：opencode `packages/opencode/src/session/session.ts` getUsage）——`tokens_input` 不含 cache、`tokens_output` 不含 reasoning、cache read/write 为独立加性分项、总量不落库。适配器经 `lib/opencode-storage-semantics.mjs` 统一标注，归一总量 = input + output + cache_read + cache_write + reasoning；独立 opencode 适配器同口径。
+
 # Mobilework 数据源明细
 
 > 本文件从 [SPEC.md](../../SPEC.md) §2.3 拆分，自包含 Mobilework 的数据源探测明细：安装目录、数据目录、数据源表、事件格式、字段语义、指标可用性与限制。  
@@ -21,11 +27,11 @@
 | model | text | JSON：`{"id":"shangtang/deepseek-v4-flash","providerID":"..."}` |
 | agent | text | Agent 名称 |
 | cost | real | 成本（当前均为 0） |
-| tokens_input | integer | 输入 Token |
-| tokens_output | integer | 输出 Token |
+| tokens_input | integer | 输入 Token（**不含 cache**：opencode getUsage 已扣除 cache read/write） |
+| tokens_output | integer | 输出 Token（**不含 reasoning**：opencode getUsage 已扣除） |
 | tokens_reasoning | integer | 推理 Token |
-| tokens_cache_read | integer | 缓存命中读取 |
-| tokens_cache_write | integer | 缓存写入 |
+| tokens_cache_read | integer | 缓存命中读取（独立加性分项） |
+| tokens_cache_write | integer | 缓存写入（独立加性分项） |
 | time_created | integer | 创建时间（epoch ms） |
 | time_updated | integer | 更新时间 |
 | time_compacting | integer | 压缩时间 |

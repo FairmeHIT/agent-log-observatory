@@ -1,3 +1,5 @@
+> 2026-10-14 v0.0.12 可靠性修复：以 [复核回执](../reliability-review-2026-10-14.html) 为最新指标准入规则。Token 总量不再在包含关系未知时相加；未观测终态不能补成功；generation end、代理响应头和未绑定时间窗不能证明原生首 token。下文历史数据源样本不自动证明当前指标完整覆盖。
+
 # Codex（OpenAI Codex Desktop）数据源明细
 
 > 本文件从 SPEC.md §2 拆分而来，是 Codex Agent 的完整数据源探测记录。SPEC.md 总览见 [SPEC.md](../../SPEC.md)。

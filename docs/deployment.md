@@ -93,10 +93,10 @@
    不将调试口暴露到局域网/公网；不要在对外发布的截图中公开会话 URL。能否开启 CDP 取决于客户端版本。
 3. `Invoke-RestMethod http://127.0.0.1:9223/json/version` 确认本地调试口可访问。
 4. 运行 `start.cmd`（检测到 9223 端口会自动附着采集器），或前台运行 `node collectors/doubao-cdp-collector/index.mjs`。非默认端口先设置 `$env:DOUBAO_CDP_PORT`。
-5. 在豆包**正常发消息**，确认 `runtime/collectors/doubao/attempts-YYYYMMDD.jsonl`，诊断/锁文件在 `runtime/`。然后查看 Dashboard。
+5. 在豆包**正常发消息**，确认 `runtime/collectors/doubao/events-YYYYMMDD.jsonl`，诊断/锁文件在 `runtime/`。然后查看 Dashboard。
 6. `stop.cmd` 即可停掉采集器；退出 Doubao 并不带调试参数重新启动，关闭 CDP。没有要卸载的客户端插件。
 
-当前 TTFT 在未收到首 chunk 事件时回退到 `responseReceived`（derived）；Token/model 字段缺失保持 nc。不能从 `fetch_token` 推断 Token 消耗。
+0.3 的 `health.json` 显示连接/流协议支持/写入错误，事件使用上海日期。没有首文本或缓冲回补发生时间时保持 null，响应头单独作为 `client_headers_ms`；内部 TTFT/Token/重试不据此填充。CDP 需要明确 `trajectory_session_id` 或已核实且唯一的本机 `agents.doubao.conversationBindings` 才进入会话指标，未绑定数据保留安装级诊断。旧 attempts 文件保留原样。锁存在时先核对 JSON pid/epoch 的进程归属（旧版可能仅 pid），确认是过期本项目锁后方可手动移除；不要按端口或名称杀进程。详见 [0.3 指标与绑定说明](doubao-observation-v0.3.md)。
 
 ## 5. 老电脑迁移、排错与发布
 

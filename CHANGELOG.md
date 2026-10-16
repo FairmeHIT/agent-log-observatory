@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## v0.0.13 — opencode storage token semantics (2026-10-15)
+
+- Mobilework（内嵌 opencode 引擎）与独立 opencode 的存储级 token 包含关系已从 opencode 源码实证（`packages/opencode/src/session/session.ts` getUsage）：`tokens_input` 不含 cache read/write、`tokens_output` 不含 reasoning、cache 分项为独立加性桶、totalTokens 不落库。
+- 新增 `lib/opencode-storage-semantics.mjs` 统一标注口径；Mobilework session 表与 opencode 消息级/session 回退三条提取路径全部接入，归一总量 = input + output + cache_read + cache_write + reasoning（`normalized_total_false_false_exclusive`）。
+- 未接入前采集的 unknown 口径保持 null 不回填；历史 Trial 需重新采样才会带新口径。回归测试覆盖"未证明口径仍拒绝归一"与"证明口径不可被调用方覆盖"。
+
+## v0.0.12 — Reliable historical capture and token semantics (2026-10-14)
+
+- Preserve explicit Session ownership for call usage, validate archived WorkBuddy identity from native transcripts, and query Mobilework/TeleAgent by exact Session ID.
+- Read-only, loopback session-evidence helper for explicit historical recovery; no cache sync, collector installation or client/model requests.
+- Console integration and private seven-day recovery results are recorded in docs/reliability-review-2026-10-14.html. Missing values and unknown Total semantics remain null; old Trials and scores are immutable.
+
+## v0.0.11 — Chart data and observation consistency (2026-10-14)
+
+- Live bounded-window export snapshots, per-section failure receipts, chart-data GET endpoint and UI download; selected exports share the same path.
+- Five chart families with distinct activity proxies and external-outcome cohorts, exact-k explicit task/trial binding, tester/installation namespaces and input SHA-256 receipts. Offline preparation preserves input files and refuses output overwrite.
+- Mobilework scalar SQLite projection, stream-kind/sequence pairing, retry-event isolation and missing logical-call semantics; TeleAgent native tool name/call ID/state/timing and step-finish requirement.
+- Unique/raw/duplicate record counts, conflict-aware known-terminal rates, unresolved/cancelled coverage, separate LLM/tool rates and metric-cache snapshot replacement. Cache comparison preserves metric metadata, pools known denominators and rejects mixed units/semantics.
+- Unknown cache semantics stay null; process-wide Mobilework diagnostics stay installation-scoped; WorkBuddy trace duration requires session binding. No additional dependency or client configuration write.
+- Regression, real local read-only sample checks and chart-data contract: docs/chart-data.html. Historical missing telemetry and business outcomes are not backfilled by inference.
+
+## v0.0.10 — Doubao observation follow-up (2026-10-13)
+
+- Doubao adapter/collector 0.3.0: unique tool/result pairing, unknown terminal coverage, source freshness and explicit session binding; assistant messages no longer substitute for logical LLM calls.
+- Protocol-probed incremental SSE and independent WS observation, metadata-only event schema and health diagnostics. Client headers/first-text/reply timing is separate from internal TTFT; usage/retry remain missing.
+- Shared metrics-0.3.0 formulas, installation-scoped RPA/Bridge API, UI evidence/coverage cards, synthetic fixtures, research and deployment contract. No additional dependencies.
+
 ## v0.0.10 — 2026-10-12
 
 ### Added
@@ -69,3 +96,12 @@ All notable changes to this project are documented in this file.
 ### Acceptance
 
 - `node server.mjs` starts, `http://127.0.0.1:8780/api/health` returns 4 agent discovery results.
+
+## 0.0.12 — 2026-10-14
+
+- Validate token inclusion semantics in the shared accounting engine, preserve true zeros and partial component coverage; uncertain totals remain null.
+- Reject malformed/failed SQLite reads, with a lossless Node built-in read-only fallback for CLI encoding faults.
+- Preserve unknown/cancelled Codex and DSH terminals; separate LLM/tool rate identities and remove cumulative-token peak-context fallback.
+- Exclude completion-span end and unbound proxy response arrival from first-token timing; reject invalid clocks.
+- Console integration review: sealed full-identity saved samples, whole sampling versions, semantic/coverage reporting and exactly-five scored Trial cohorts. See docs/reliability-review-2026-10-14.html.
+- Close underscore-key allowlist bypass; consistently filter call/metric/failure/excerpt APIs and omit raw diagnostic/conversation bodies.

@@ -1,3 +1,9 @@
+> 2026-10-14：WorkBuddy 调用 usage 保留显式 session_id；客户端清理 sessions 索引后，历史身份凭 transcript 原生 sessionId 核验。Mobilework/TeleAgent 支持精确会话查询，Console 补采与分项统计见 [可靠性复核增量](docs/reliability-review-2026-10-14.html#capture-backfill).
+
+> 2026-10-14 v0.0.12 可信度修复：Token 分项/总量的包含语义、SQLite 无损只读回退、未知终态和 Console 保存统计门禁见 [复核回执](docs/reliability-review-2026-10-14.html)。历史草案能力矩阵不代表当前指标准入。
+
+> 2026-10-14 实现增量：v0.0.11 的图表数据与实时导出契约见 [chart-data.html](docs/chart-data.html) 和 schemas/chart-*.schema.json。此增量是已实现工程入口，下文历史草案不自动升级为已验收。
+
 > 当前部署边界（v0.0.9，2026-10-04）：项目内归档依赖/采集器，Node 24.x + Windows x64；runtime 为私有运行产物。默认只读与显式 opt-in 采集分离，安装/回退及当前文件边界以 AGENTS.md 和 docs/deployment.md 为准。下文保留原始架构规格，历史阶段状态不代表当前安装门槛。
 
 # Agent Log Observatory — 需求分析与工程 SPEC
@@ -93,26 +99,32 @@
 | 指标 | WorkBuddy | Mobilework | TeleAgent | Doubao | DSH | Codex | 说明 |
 |---|---|---|---|---|---|---|---|
 | **TTFT** | ❌ | ⚠️ stream-timings.json | ❌（v2.6 DB 有 reasoning.time.start，适配器已支持） | ❌ | ✅ sessionStats.ttftMs | ✅ thread_items 首 item started_at − turn started_at | DSH/Codex 原生，Mobilework 条件 |
-| **任务 E2E 时延** | ✅ per-turn | ✅ runs.jsonl | ✅ DB step-finish | ⚠️ mtime | ✅ per-step | ✅ thread_turns.duration_ms（原生） | WorkBuddy/Mobilework/DSH/Codex 精确 |
+| **任务 E2E 时延** | ✅ per-turn | ✅ runs.jsonl | ✅ DB step-finish | ❌ trajectory 无时间戳 | ✅ per-step | ✅ thread_turns.duration_ms（原生） | WorkBuddy/Mobilework/DSH/Codex 精确 |
 | **Session 墙钟跨度** | ✅ transcript 首末 | ✅ session time | ✅ 日志首末 | ❌ | ✅ createdAt→末事件 | ✅ threads created_at→updated_at | 新增独立指标 |
 | **Token 消耗量** | ✅ rawUsage | ✅ session tokens | ✅ step-finish tokens | ❌ | ✅ tokenUsage.totals | ✅ rollout token_usage_record + threads.tokens_used | 全部（除 Doubao） |
 | **Token 吞吐量** | ✅ completion/时延 | ✅ output/duration | ✅ total/E2E | ❌ | ✅ decodeTokens/decodeMs | ⚠️ tokens_used / sum(duration_ms) | DSH 原生精确 |
-| **输入 Tokens** | ✅ prompt_tokens（含 cache） | ✅ tokens_input | ✅ in（不含 cache） | ❌ | ✅ uncachedInput | ✅ rollout usage.input_tokens（含 cache） | 跨 Agent 注意 input_includes_cache |
+| **输入 Tokens** | ✅ prompt_tokens（含 cache） | ✅ tokens_input（不含 cache） | ✅ in（不含 cache） | ❌ | ✅ uncachedInput | ✅ rollout usage.input_tokens（含 cache） | 跨 Agent 注意 input_includes_cache；Mobilework/独立 opencode 为同一 opencode 存储口径 |
 | **输出 Tokens** | ✅ completion_tokens | ✅ tokens_output | ✅ out | ❌ | ✅ outputTokens | ✅ rollout usage.output_tokens（含 reasoning） | 全部可计（除 Doubao） |
 | **命中 Tokens (cache)** | ✅ prompt_cache_hit | ✅ cache_read | ✅ cacheRead | ❌ | ✅ cacheReadTokens | ✅ rollout usage.cached_input_tokens | 全部可计（除 Doubao） |
 | **Tokens-Credits 换算** | ✅ credit | ⚠️ cost=0 | ❌ cost=0 | ❌ | ❌ | ❌ | WorkBuddy 有 credit |
 | **最大上下文** | ✅ max(prompt+completion) | ✅ tokens_input 峰值 | ✅ max(in+cacheRead) | ❌ | ✅ surfaceTokens | ✅ rollout input_tokens 峰值 | 全部可计（除 Doubao） |
 | **Context Window** | ❌ | ❌ | ❌ | ❌ | ✅ contextPressure.contextWindow | ✅ 运行时 token_count.model_context_window + config.toml | DSH/Codex |
 | **Compaction threshold** | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ config.toml + logs.auto_compact_scope_limit | 仅 Codex |
-| **LLM 调用次数** | ✅ rawUsage 行数 | ✅ event started | ✅ step-start 数 | ✅ assistant 行数 | ✅ step-start 数 | ✅ thread_turns 计数 | 全部可计 |
+| **LLM 调用次数** | ✅ rawUsage 行数 | ✅ event started | ✅ step-start 数 | ⚠️ 仅显式 llm_call_id；助手消息另计 | ✅ step-start 数 | ✅ thread_turns 计数 | 全部可计 |
 | **LLM 重试率** | ⚠️ isRetryable | ✅ retried event | ❌ | ❌ | ⚠️ llmRetry（空） | ❌ | Mobilework 精确 |
-| **LLM 成功率** | ✅ 成功/总 | ✅ step status | ✅ 成功/总 | ⚠️ 无标记 | ⚠️ 无 error 事件 | ✅ thread_turns.status=completed | WorkBuddy/Mobilework/TeleAgent/Codex |
+| **LLM 成功率** | ✅ 成功/总 | ✅ step status | ✅ 成功/总 | ❌ 无内部调用终态 | ⚠️ 无 error 事件 | ✅ thread_turns.status=completed | WorkBuddy/Mobilework/TeleAgent/Codex |
 | **工具调用次数** | ✅ function_call | ✅ tool.called | ✅ step-finish | ✅ tool_calls[] | ✅ tool/call | ✅ commandExecution+mcpToolCall | 全部可计 |
-| **人工确认次数** | ❌ | ❌ | ✅ perm by≠通配 | ✅ user 确认 | ⚠️ approval="ask" | ⚠️ approval_mode="OnRequest"（模式） | TeleAgent/Doubao |
+| **人工确认次数** | ❌ | ❌ | ✅ perm by≠通配 | ⚠️ CDP 明确审批配对 | ⚠️ approval="ask" | ⚠️ approval_mode="OnRequest"（模式） | TeleAgent/Doubao |
 | **Event 总数** | ✅ jsonl 行数 | ✅ event COUNT | ✅ log 行数 | ✅ trajectory+runner | ✅ zstd 帧数 | ✅ thread_items COUNT | 全部可计 |
-| **Step 总数** | ✅ reasoning+func | ✅ step.started | ❌ | ✅ 循环对数 | ✅ sessionStats.steps | ✅ thread_items 总数 | WorkBuddy/Mobilework/Doubao/DSH/Codex |
+| **Step 总数** | ✅ reasoning+func | ✅ step.started | ❌ | ❌ 无原生循环边界 | ✅ sessionStats.steps | ✅ thread_items 总数 | WorkBuddy/Mobilework/Doubao/DSH/Codex |
 | **Compaction 次数** | ❌ | ✅ compaction event | ✅ compaction part | ❌ | ❌ | ✅ contextCompaction items | Mobilework/TeleAgent/Codex |
-| **失败归因** | ⚠️ error+log | ✅ event+log | ⚠️ log | ⚠️ log | ❌ | ⚠️ thread_turns.error_json | 需日志解析 |
+| **失败归因** | ⚠️ error+log | ✅ event+log | ⚠️ log | ⚠️ 结构化工具终态；文本仅候选 | ❌ | ⚠️ thread_turns.error_json | 需日志解析 |
+
+### 3.1.1 Doubao 0.3 观测补充（2026-10-13）
+
+采用 `metrics-0.3.0`，跨 Agent 原定义保留 0.2。助手消息不冒充 LLM 调用；工具 ID 按会话/Agent 隔离并配对，输出未知终态覆盖率；mtime 仅数据新鲜度。CDP 客户端响应头、首文本、HTTP/SSE 回复耗时独立于内部 LLM TTFT 和任务 E2E。明确审批配对及任务状态仅覆盖已观测窗口。RPA/Bridge 全局源保持 installation scope，明确 session ID 或私有目录所有权才能进入会话；不与 LLM 工具双算。
+
+事件 schema：`schemas/doubao-collector-event.schema.json`；输出白名单元数据，无正文/凭据。conversation ID 不等于目录 session ID，移除时间窗绑定，默认映射为空。新增只读 `GET /api/agents/doubao/default/infrastructure`，健康诊断和基础设施指标保持安装级。指标、公式、兼容与验证边界见 [Doubao 0.3 契约](docs/doubao-observation-v0.3.md)。协议 fixture 不代表实际客户端采集验收。
 
 ### 3.2 数据源能力总结
 
@@ -372,6 +384,8 @@ export class BaseAdapter {
 | GET | `/api/eaqe-bundles`、`/api/eaqe-observations?bundle=...` | 旧 EAQE 阅读路由及 Bundle ID 兼容，见 §9.2 |
 
 响应含 schema/metric_definition_version；合法未捕获/不可比指标 200 + null/原因，未知实体404、非法 scope/游标400、源局部故障写 health。禁止任意 CORS/跨 origin 读取，HTML 对源字符串转义，防止日志内容执行脚本。
+
+2026-10-12：会话指标端点可选 `fresh=1`，通过对象 Adapter 只读重新提取，绕过展示缓存但不写入/重算缓存表、不安装采集器、不发模型请求。省略或 `fresh=0` 维持缓存优先；其他值 400。返回 `source=live|db|unavailable` 与 `fresh`。调用时刻不证明采集完整；独立使用方应保存版本、缺失状态、身份绑定及自己的不可变快照。共享实现 `lib/session-metrics-read.mjs`。
 
 ### 7.2 页面
 

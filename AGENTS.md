@@ -7,7 +7,7 @@
 
 可独立 clone/部署的跨 Agent 本地日志观测工具；不依赖父工作区、其他 Dashboard 或某个开发者的用户目录。Agent 差异留在 Adapter Plane，指标引擎保持通用。
 
-当前工程版本 **v0.0.10**。Windows x64 + Node.js **24.x** 是本次验证组合；跨系统移植须另验，不能照搬旧版 Node 18 的说明。
+当前工程版本 **v0.0.13**。Windows x64 + Node.js **24.x** 是本次验证组合；跨系统移植须另验，不能照搬旧版 Node 18 的说明。
 
 ## 2. 文件所有权与外部边界
 
@@ -39,10 +39,10 @@
 
 | Agent | 默认外部数据源 | 主要限制/可选增强 |
 |---|---|---|
-| WorkBuddy | `~/.workbuddy/` transcript/trace | TTFT 依赖 generation span；重试/人工确认受源限制 |
-| Mobilework | `~/.mobilework/` SQLite/runs/model-raw | HTTP 代理可补 TTFT；旧 sidecar 仅可选读入，不要求安装 |
+| WorkBuddy | `~/.workbuddy/` transcript/trace | generation span end 仅证明完成时刻，不能补 TTFT；重试/人工确认受源限制 |
+| Mobilework | `~/.mobilework/` SQLite/runs/model-raw | Token 分项含已实证的 opencode 存储口径（input 不含 cache、output 不含 reasoning），可归一 Total；HTTP 代理可补 TTFT；旧 sidecar 仅可选读入，不要求安装 |
 | TeleAgent | `~/.local/share/TeleAgent/`、`~/.config/TeleAgent/` | 日志无首 token 锚点，TTFT nc |
-| Doubao | `${LOCALAPPDATA}/Doubao/`、`~/Doubao/` | CDP 可补 derived TTFT/retry；当前响应无 Token usage |
+| Doubao | `${LOCALAPPDATA}/Doubao/`、`~/Doubao/` | CDP 可补客户端首文本/回复耗时与明确事件；内部 TTFT/retry/Token usage 仍缺失 |
 | DSH | `~/.dsh/`、`${APPDATA}/dsh-desktop/` | 多帧 zstd；失败归因受源限制 |
 | Codex | `~/.codex/` SQLite/config + `sessions/**/rollout-*.jsonl` | Token 分项读 rollout `token_usage_record`（input 含 cache、output 含 reasoning）；旧会话回退 logs 累计值按 turn 去重取 diff；credits/retry 缺失 |
 | opencode | `~/.local/share/opencode/`、`~/.config/opencode/` | 可选 V2 session-hook 插件；版本兼容必须实测 |

@@ -11,7 +11,7 @@
 | node-addon-api | 8.9.2，`vendor/npm/node-addon-api-8.9.2.tgz` | better-sqlite3 的传递依赖；同样本地离线安装 |
 | opencode 插件 | `collectors/opencode-collector-plugin/{index.mjs,package.json}`，实现 0.3.0 | 源码留项目；客户端仅注册绝对路径引用 |
 | Mobilework 代理 | `collectors/mobilework-llm-proxy/`，实现 0.2.0 | 项目内运行；本机路由在 `runtime/mobilework-proxy.json` |
-| Doubao CDP 采集器 | `collectors/doubao-cdp-collector/`，实现 0.1.0 | 项目内运行，无用户目录插件副本 |
+| Doubao CDP 采集器 | `collectors/doubao-cdp-collector/`，实现 0.3.0（Node 内置 HTTP/WebSocket/TextDecoder，新增依赖：无） | 项目内运行，无用户目录插件副本 |
 | 改造前采集器原件 | `vendor/archives/collectors-before-portability-20261004.tar.gz` | 原 index/package、两种安装脚本、attempt schema；仅历史归档，不执行旧默认路径 |
 | 安装/状态/卸载 | `collectors/install-*.mjs` | 按部署文档显式执行，默认 setup 不运行 |
 | 部署/进程/迁移工具 | `scripts/{setup,doctor,paths,import-legacy-collectors,audit-local-installation,export-release}.mjs`、`services.ps1`、根目录 `.cmd` | 项目内，无全局工具安装 |
@@ -24,7 +24,7 @@
 - 两个 npm tgz 是从本机正在用的 **已安装 npm 包重打包**（`npm pack --ignore-scripts`），不是声称下载了上游原始 tgz。保留现有源码、原生预构建文件及包内许可证；lockfile 固定本地 tgz 与 integrity。
 - SQLite CLI 来自现有项目文件，版本由实际二进制 `-version` 得到；历史下载来源与官方上游二进制哈希**未独立核验**。记录本地 SHA-256 只保证归档一致，不等于上游签名/供应链认证。公开发布前应重新核验来源。
 - `vendor/licenses/` 留存两个 npm 依赖的 MIT 原文；SQLite 授权说明见 `THIRD_PARTY_NOTICES.md`。
-- 项目自身尚未选择开源许可证；`private:true` 防止误 npm publish，**不代表代码已经授予开源使用权**。版权/授权归属由项目所有者确认，不自动给闭源客户端重新授权。
+- 项目自身采用根目录 `LICENSE` 中的 Apache-2.0，`package.json` 标注同一许可证；第三方授权仍以各自许可证/声明为准，不给闭源 Agent 客户端重新授权。
 
 ## 3. 不打包的外部前提/可选输入
 
@@ -47,3 +47,11 @@
 旧 `~/.agent-log-observatory/collectors/` 的 attempts 已通过 copy-only 导入项目 runtime；同名文件跳过，源目录保留。运行中的旧客户端/采集器需用户自行停旧、重启后才采用新路径。
 
 本机配置、代理上游地址、采集历史、缓存 DB、资源快照、诊断与启动日志全部私有。发布白名单不包含它们；整个工作目录不是可直接开源的归档。
+
+## 2026-10-14 内置 SQLite 无损只读回退
+
+`lib/sqlite-query.mjs` 首选项目内 SQLite CLI 的 `-readonly` + JSON；原生客户端文本导致 JSON 解析失败时使用 Node 24.19.0 自带 `node:sqlite`、`DatabaseSync(..., {readOnly:true, timeout:2000})` 执行同一查询。没有新增 npm/全局 SQLite 依赖。CLI 失败、缺表、非法 JSON 且回退失败都报明确读取错误，不能冒充空结果；不再用分隔符拆文本。验证：`node --test tests/test-sqlite-background-process.mjs` 包含换行/分隔符/null 保真与数据库字节不变；回退边界可通过回退前的错误分支复核。部署仍使用既有 Node 24.x、setup 和 doctor；回退代码位于项目内，删除运行产物不影响原生 Agent 源。
+
+## 2026-10-14 显式历史只读采样助手
+
+scripts/session-evidence-server.mjs 只复用本项目 Adapter、Node 24.x 和既有 SQLite 读取器，无新增依赖、外部工具或安装动作；源码遵循本项目 Apache-2.0 许可。必要性是补采时独立读取当前代码，不触发常规缓存同步。步骤：1. setup/doctor 验证既有依赖；2. 显式运行 node scripts/session-evidence-server.mjs；3. 读取输出的随机 loopback 端口，GET 精确 session/metrics 接口；4. 核对身份和指标状态；5. Ctrl+C 只停止该助手。原生日志始终只读，数据不复制入源码；回退为停止助手并使用旧服务，补采新档保留，不改旧档。标准服务已复用精确会话查询，助手不是部署必需项。

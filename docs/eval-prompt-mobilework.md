@@ -45,6 +45,8 @@
 | `output_tokens` | tokens | 原始输出 Token（标注 `output_includes_reasoning`） |
 | `cache_hit_tokens` | tokens | 缓存命中读取 Token |
 
+> **Mobilework 口径提示**：数据源为内嵌 opencode 引擎存储，`tokens_input` 已扣除 cache read/write（`input_includes_cache=false`）、`tokens_output` 已扣除 reasoning（`output_includes_reasoning=false`）、cache 分项为独立加性桶（`cache_write_accounting='exclusive'`）。归一总量 = input + output + cache_read + cache_write + reasoning。
+
 ### LLM / Tool / Step
 
 | 指标 ID | 单位 | 定义 |

@@ -293,60 +293,20 @@ opencode engine → http://127.0.0.1:8890/v1 (代理) → http://47.112.174.22:3
 - trace 覆盖率：34 sessions → 39 traces with sessionId（不是每个 session 都有 trace；活跃 session 可能无 trace）。
 - `startedAt`/`endedAt` 是 ISO string（毫秒精度），转 epoch_ms 后 `precision_ns: 1`，reader 应用 5ms 物理下限过滤。
 
-### 5.4 Doubao CDP Collector（P4 已实现，实测 TTFT=183ms）
+### 5.4 Doubao CDP Collector 0.3.0
 
-**原理**：Doubao 是 Chromium 147 应用，支持 `--remote-debugging-port` 开启 CDP 调试。通过 WebSocket 连接 CDP Network 域，拦截 `POST /chat/completion`（SSE `text/event-stream`）的完整生命周期。
+2026-10-13 更新：早期将响应头 183 ms 命名为 TTFT、以时间窗将 conversation 关联 trajectory，以及默认 0 次重试的解释已撤销。这些历史值没有证明内部首 token/重试或唯一会话归属，不能作为现版本真实采集验收。
 
-**调研关键发现**：
-- Doubao 技术栈：Chromium 147 非标准 Electron，无插件机制，不读 `HTTP_PROXY` → MITM 代理方案不可行。
-- CDP target：`doubao://doubao-chat/chat/<conversation_id>`，LLM 端点 `POST https://www.doubao.com/chat/completion`。
-- SSE 事件类型：`SSE_HEARTBEAT`、`SSE_ACK`、`FULL_MSG_NOTIFY`、`STREAM_MSG_NOTIFY`、`STREAM_CHUNK`、`CHUNK_DELTA`、`SSE_REPLY_END`。
-- `Network.streamDataReceived` **不触发**（Doubao SSE 流不产生此事件）→ TTFT 用 `responseReceived` 时间戳（derived）。
-- `conversation_id` 在 postData `client_meta.conversation_id`（嵌套 JSON），非顶层字段。
-- SSE 响应体（`SSE_REPLY_END`）**不含** token usage 或 model 字段，仅含 `fetch_token`（非 usage）。
+0.3 用 Node 内置 HTTP/WebSocket 观察豆包本机 CDP；先查询协议支持，再调用实验性 `Network.streamResourceContent`，接收缓冲前缀和 `Network.dataReceived.data`。旧 `Network.streamDataReceived` 不是所需的标准协议事件。
 
-**CDP 时间戳陷阱**：CDP `timestamp` 是单调时钟（非 epoch），`wallTime` 是 epoch 秒（仅 `requestWillBeSent` 有）。转换公式：`epoch_ms = requested_at + (event_ts - req_ts) * 1000`。
+- 响应头仅 `client_headers_ms`；首解析文本仅 `client_first_text_ms`，内部 TTFT 仍缺失。缓冲回补不伪造发生时间；SSE reply.end 与 HTTP EOF 分开。
+- 文本仅在有限内存中增量解析计数，落盘白名单元数据；不 getResponseBody、不注入 fetch 包装、不发消息/读 Cookie。
+- WS 工具通知独立于 HTTP 生命周期；审批与任务状态仅支持明确结构，不按自然语言猜测。
+- conversation 与目录 session 属不同命名空间；仅明确 trajectory ID 或用户已核实且唯一的绑定映射关联，不用文件时间窗。
+- 断连/不支持流/解析错误标记缺口；健康文件包含连接数、流支持、写入错误、上海日期事件文件。
+- 旧 attempts 保留；指标引擎仍是共享 `lib/metrics.mjs`，特定解析/关联位于 Adapter Plane。
 
-**hook → 指标映射**：
-
-| CDP 事件 | 字段 | 映射 |
-|---|---|---|
-| `Network.requestWillBeSent` | `wallTime` / `request.postData` | `requested_at` + `conversation_id` + `model` |
-| `Network.responseReceived` | `timestamp` / `response.status` | `first_output_at`（derived TTFT）+ `http_status` |
-| `Network.loadingFinished` | `timestamp` | `stream_ended_at` + `getResponseBody` → usage |
-| `Network.loadingFailed` | `errorText` / `canceled` | `status=error` + `error_kind` |
-
-**session_id 处理**：CDP 采集的 `conversation_id` 与 agent mode workspace 的 session 目录名是不同 ID 空间。adapter 用 **time-window 匹配**（trajectory 文件 ctime/mtime 作为时间窗，`filterByTimeWindow` 过滤 collector attempts）。
-
-**实现**：`collectors/doubao-cdp-collector/index.mjs`
-- 独立 Node 进程，WebSocket→CDP，无需安装到 Doubao
-- 进程锁（`runtime/doubao-cdp-collector.lock`）防多实例
-- Keep-alive 心跳（`setInterval`）防事件循环退出
-- WebSocket 泄漏防护（连接失败时 `ws.close()`）
-- `processedRequestIds` Set 防重连重复处理
-- `Network.enable` 成功前不处理事件（`networkReady` 标志）
-- 落盘字段对齐 `schemas/collector-attempt.schema.json`（`collector-attempt-0.1.0`）
-
-**启动**：
-```cmd
-REM 1. Doubao 以调试端口启动
-"D:\02-software-install\doubao-zijie\Doubao\app\Doubao.exe" --remote-debugging-port=9223
-
-REM 2. 启动采集器（start.cmd 检测到 CDP 端口时也会自动附着）
-start.cmd
-```
-
-**实测结果**（conversation `38445522909057538`）：
-- `llm_attempt_ttft_ms`: value=183ms, state=`captured`（从 `not-captured` 升级），`first_output_source: "derived"`
-- `llm_retry_count`: value=0, state=`captured`（从 `not-captured` 升级）
-- e2e: 3761ms（`loadingFinished` - `requestWillBeSent`，时间戳正确转换）
-
-**侵入度**：低。Doubao 需以 `--remote-debugging-port` 启动（一次性），采集器独立进程运行，不改 Doubao 安装。
-
-**已知限制**：
-- TTFT 是 derived（`responseReceived` 响应头到达），非真实首 SSE chunk。
-- SSE 响应体无 usage/model → `token_input`/`token_output`/`token_total` 仍 `not-captured`。
-- `conversation_id` 与 trajectory session_id 不同 ID 空间，靠时间窗匹配（近似）。
+协议测试覆盖增量/重复/并发/断连等边界；真实客户端 CDP 当前未连接，尚未实测 0.3 采集。完整指标、绑定、schema、安装/回退见 [0.3 契约](doubao-observation-v0.3.md)与[部署指南](deployment.md#4-doubao-cdp无额外插件)。
 
 ## 6. observatory 适配器改动（最小化）
 
@@ -407,7 +367,7 @@ tests/fixtures/collector-sample/
 | P2 | WorkBuddy trace 直读 + 适配器接入 | ✅ 完成（实测 TTFT=13690ms） | P0 |
 | P3 | Mobilework MITM 反向代理 + time-window 匹配 | ✅ 完成（代理 + 安装脚本 + adapter 接入 + 6 测试） | P0 + sidecar 调研（闭源） |
 | P4 | observatory `capabilities` 动态化 + 文档更新 | ✅ 完成 | P1-P3 |
-| P5 | Doubao CDP Collector + 适配器接入 + 文件监听方案 A | ✅ 完成（实测 TTFT=183ms） | P0 + CDP 探测 |
+| P5 | Doubao CDP Collector + 适配器接入 + 文件监听方案 A | ⚠️ 0.3 协议实现/fixture 完成，真实客户端待验 | P0 + CDP 探测 |
 
 ## 9. 已知风险
 
